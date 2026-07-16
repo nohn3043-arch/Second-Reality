@@ -68,6 +68,50 @@ The licensor, governing law, and dispute resolution are determined by the user's
 
 For commercial authorization, customized compliance assessment, or participation in the Nohn™ ecosystem, contact: **ai@nohnlins.com**
 
+## Architecture — Constitution · Law · Bridge
+
+Nohn™ Core is composed of three parts that together define the foundational axioms of the next-generation internet civilization:
+
+- **Constitution** (`constitution.py`) — the primordial, immutable axioms of the virtual world, serving as the permanent root trust anchor. It embeds a ported cognitive-audit engine (`ResponsibilityAccount` + pluggable `AuditPlugin`s) so every governance action carries a named, accountable node.
+- **Law** (`law/`) — four standard layers that iterate annually:
+  - *Communication protocol standard*
+  - *Global economic unified standard* — currency, 1:1 asset peg, proof-of-reserve, redemption rights
+  - *Identity attestation standard* — soul-hash bound identity
+  - *Physics baseline standard* — gravity / time / scale constants
+- **Bridge** (`compatibility_bridge.py`) — the sole "customs checkpoint" between old and new worlds:
+  - `translate_intent()` — semantic wash that maps vendor-private instructions to the Nohn standard vocabulary, removing hidden interpretation rights.
+  - `check_physics_constants()` — rejects worlds whose physics diverge from `NOHN_LAW_AXIOMS`.
+  - `verify_soul_hash()` — verifies identity against the soul-hash anchor.
+
+The runtime (`virtual_world.py`) integrates these with an economy, task generation, and agents.
+
+## Modules
+
+| Module | File | Responsibility |
+|---|---|---|
+| Constitution & audit | `constitution.py` | World axioms + embedded cognitive-audit engine |
+| Compatibility bridge | `compatibility_bridge.py` | Legacy-world onboarding: semantic wash + physics/soul checks |
+| Virtual world runtime | `virtual_world.py` | Economy, tasks, agents |
+| Law standards | `law/` | Communication / Economic / Identity / Physics standards |
+
+## Quick Start
+
+```bash
+# Pure Python ≥3.8 — standard library only
+python virtual_world.py --init demo
+```
+
+## Project Structure
+
+```
+SPL-virtual-world-core/
+├── constitution.py              # world axioms + embedded cognitive-audit engine
+├── compatibility_bridge.py      # legacy-world "customs": semantic wash + physics/soul checks
+├── virtual_world.py             # runtime: economy, tasks, agents
+├── law/                         # Communication / Economic / Identity / Physics standards
+└── LICENSE
+```
+
 ---
 
 *Humanity needs order. A virtual world needs a soul. We provide the answer.*
