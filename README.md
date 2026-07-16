@@ -1,73 +1,130 @@
-# A virtual world must first be a world
+<p align="center">
+  <em>A virtual world must first be a world.</em>
+</p>
 
-"Nohn™" and "Second Perspective™" are unregistered trademarks in the field of virtual-world infrastructure, first used by the founding team and carrying broad industry influence. Any unauthorized use of these marks in the same or similar fields (including but not limited to software services, technology development, and standard-setting) may constitute unfair competition and trademark infringement; the Nohn™ team reserves all rights to pursue legal liability.
-
-# Nohn™ Core — The Soul of Virtual Worlds
-
-The underlying core of the virtual world I designed is like the Noah's Ark of the digital-civilization era. It constructs an independent, self-consistent system of world rules, capable of hosting virtual creatures, digital personas, and civilization data. Beyond the fluctuations and uncertainties of the real world, it builds an eternal haven for spiritual and digital habitation, laying a solid foundation for the continuation, evolution, and perpetual existence of virtual civilization.
-
-**Nohn™ = Constitution + Law + Compatibility Framework**
-*Defining the foundational axioms of the next-generation internet civilization*
-
----
-
-## Project Overview
-
-Nohn™ Core is the underlying core framework for future virtual worlds, composed of three parts — Constitution, Law, and Bridge:
-
-- **Constitution**: The primordial axioms of the virtual world. Permanently locked and immutable, serving as the "root trust anchor" of the entire architecture.
-- **Law**: Identity authorization, communication protocols, physical baselines, and compliance rules. Iterated annually with versioned releases as industry needs and technology evolve.
-- **Bridge**: A globally unified interoperability protocol, acting as the "customs checkpoint" between old and new worlds, ensuring applications from any vendor interconnect within the Nohn™ ecosystem.
-
-**This project builds no platform, ships no product, hosts no data, and operates no service** — it only defines the rules, provides the soul, and guards the order.
+<p align="center">
+  <img src="https://img.shields.io/badge/framework-Nohn™_Core-D4AF37?style=flat-square" alt="nohn">
+  <img src="https://img.shields.io/badge/pillars-constitution_|_law_|_bridge-2C2C2C?style=flat-square" alt="pillars">
+  <img src="https://img.shields.io/badge/v2016-permanent_root-2C2C2C?style=flat-square" alt="version">
+</p>
 
 ---
 
-## Important Notice
+&nbsp;
 
-© 2026 Nohn™. All Rights Reserved.
+## ✦ Nohn™ Core — The Soul of Virtual Worlds
 
-This Work (including but not limited to code, documentation, design language, architectural paradigms, and model definitions) is original intellectual output, with all rights reserved under the Berne Convention and the copyright laws of each jurisdiction. Without written authorization signed by the rights holder, no organization or individual may:
+The underlying core framework for future virtual worlds — an independent, self-consistent system of world rules, capable of hosting virtual creatures, digital personas, and civilization data.
 
-- Copy, distribute, or publicly disseminate the source code or documentation of this Work;
-- Modify, re-develop, reverse-engineer this Work, or integrate it into competing platforms;
-- Strip or imitate the core design concepts defined in this Work, such as constitutional clauses, legal rules, and interoperability protocols.
+> **Nohn™ = Constitution + Law + Bridge**
 
-**Trademark Notice**: "Nohn™" and "Second Perspective™" are unregistered trademarks in the virtual-world field, protected under anti-unfair-competition law and the common-law passing-off regime. Any unauthorized commercial use constitutes infringement.
+&nbsp;
+
+## ✦ The Three Pillars
+
+```mermaid
+graph TD
+    subgraph "Nohn™ Core Framework"
+        direction TB
+
+        CONST(("Constitution<br/><sub>Permanent · Immutable</sub>")):::root
+        LAW(("Law<br/><sub>Annual · Versioned</sub>")):::layer
+        BRIDGE(("Bridge<br/><sub>Global Interop Protocol</sub>")):::layer
+
+        CONST --> |"derives"| LAW
+        LAW --> |"enforces"| BRIDGE
+    end
+
+    subgraph "Ecosystem"
+        APP1(("Vendor A<br/>Application")):::app
+        APP2(("Vendor B<br/>Application")):::app
+        APP3(("Vendor C<br/>Application")):::app
+        APP4(("Legacy<br/>World")):::app
+    end
+
+    BRIDGE --> APP1
+    BRIDGE --> APP2
+    BRIDGE --> APP3
+    BRIDGE --> APP4
+
+    classDef root fill:#F5F0E6,stroke:#C9A96E,stroke-width:3px,color:#2C2C2C
+    classDef layer fill:#FAFAFA,stroke:#D4AF37,stroke-width:1px,color:#2C2C2C
+    classDef app fill:#FAFAFA,stroke:#B8B8B8,stroke-width:1px,color:#2C2C2C
+```
+
+&nbsp;
+
+## ✦ Pillar Details
+
+| Pillar | Role | Lifecycle |
+|--------|------|-----------|
+| **Constitution** | Primordial axioms · root trust anchor | **Permanently locked**, immutable |
+| **Law** | Identity auth · communication · physics · compliance | **Annual iteration**, versioned releases |
+| **Bridge** | Cross-world interoperability · "customs checkpoint" | Global unified protocol |
+
+&nbsp;
+
+## ✦ Design Principles
+
+```
+This project builds no platform,
+ships no product,
+hosts no data,
+operates no service.
+
+It only defines the rules,
+provides the soul,
+and guards the order.
+```
+
+&nbsp;
+
+## ✦ Architecture
+
+```
+┌────────────────────────────────────────────────────┐
+│                   Nohn™ Core                        │
+│                                                    │
+│  ┌──────────────────────────────────────────────┐  │
+│  │  CONSTITUTION    (immutable root)             │  │
+│  │  ┌────────────────────────────────────────┐  │  │
+│  │  │  LAW          (annual release cycle)    │  │  │
+│  │  │  ┌──────────────────────────────────┐  │  │  │
+│  │  │  │  BRIDGE   (interop protocol)     │  │  │  │
+│  │  │  │                                  │  │  │  │
+│  │  │  │  ┌────────┐ ┌────────┐ ┌──────┐ │  │  │  │
+│  │  │  │  │World A │ │World B │ │ ...  │ │  │  │  │
+│  │  │  │  └────────┘ └────────┘ └──────┘ │  │  │  │
+│  │  │  └──────────────────────────────────┘  │  │  │
+│  │  └────────────────────────────────────────┘  │  │
+│  └──────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────┘
+```
+
+&nbsp;
+
+## ✦ Notice
+
+This Work **is not open-source software**. It adopts a "default rights reserved + commercial authorization" model:
+
+| User | Permission |
+|------|-----------|
+| **Individual** | View source for non-commercial study only |
+| **Enterprise / Government** | Requires signed 《Nohn™ Commercial Authorization Agreement》 |
+| **Derivative works** | Must display `Powered by Nohn™ Core` |
+
+&nbsp;
 
 ---
 
-## Licensing & Authorization
-
-This Work **is not open-source software** and is not subject to any open-source license. Under the Copyright Law and the Computer Software Protection Regulations, it adopts a "default rights reserved + commercial authorization" dual-track model:
-
-- **Individual study and non-commercial research**: limited viewing of source code and documentation is permitted, but actual deployment or redistribution is prohibited.
-- **Enterprise / institution / government commercial use**: a separate 《Nohn™ Commercial Authorization Agreement》 must be signed, defining scope, compliance obligations, and liability boundaries.
-- **Derivative-work compliance**: derivative projects built on this framework must clearly display `Powered by Nohn™ Core` in code comments and the startup screen, and may not reverse-claim the framework's own intellectual property.
-
-Full terms are in the [LICENSE](./LICENSE) file.
-
-Copyright © 2026 Shanghai Linming Junhua Technology Co., Ltd. and NOHN AI TECHNOLOGY PTE. LTD. All rights reserved.
-
-| User | Purpose | License Requirement |
-|---|---|---|
-| Individual (natural person) | Non-commercial academic research / study / personal experimentation | **Free** under the "Free Individual Research License" in [LICENSE](./LICENSE) |
-| Government agency / public institution / enterprise | Any purpose (incl. internal deployment, product development, service provision) | **Requires prior written paid authorization** |
-
-- **Individual researchers** may use the Work free of charge for non-commercial research under [LICENSE](./LICENSE), but not for any commercial purpose, nor to provide services to any enterprise or government organization.
-- **Government / enterprise users** may not copy, deploy, run, integrate, or distribute the Work before signing a Commercial Authorization Agreement and paying the agreed fee.
-- **Apply for authorization**:
-  - International / Global: [ai@nohnlins.com](mailto:ai@nohnlins.com)
-  - China: [ai@tx.nohnlins.com](mailto:ai@tx.nohnlins.com)
-
-The licensor, governing law, and dispute resolution are determined by the user's location as set out in [LICENSE](./LICENSE): users within the PRC → Shanghai Linming Junhua Technology Co., Ltd. (laws of the PRC); users outside the PRC → NOHN AI TECHNOLOGY PTE. LTD. (laws of Singapore, SIAC arbitration).
-
----
-
-## Business Cooperation
-
-For commercial authorization, customized compliance assessment, or participation in the Nohn™ ecosystem, contact: **ai@nohnlins.com**
-
----
-
-*Humanity needs order. A virtual world needs a soul. We provide the answer.*
+<p align="center">
+  <em>Humanity needs order. A virtual world needs a soul. We provide the answer.</em>
+</p>
+<p align="center">
+  <sub>Nohn™ &amp; Second Perspective™ · Unregistered Trademarks</sub>
+  &nbsp;·&nbsp;
+  <a href="mailto:ai@nohnlins.com">ai@nohnlins.com</a>
+</p>
+<p align="center">
+  <sub>© 2026 Shanghai Linming Junhua &amp; NOHN AI Technology · All Rights Reserved</sub>
+</p>
