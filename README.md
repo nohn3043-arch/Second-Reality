@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  ![metaverse](https://img.shields.io/badge/metaverse--D4AF37?style=flat-square)  ![infrastructure](https://img.shields.io/badge/infrastructure--D4AF37?style=flat-square)  ![constitution](https://img.shields.io/badge/constitution--D4AF37?style=flat-square)
+  <img src="https://img.shields.io/badge/metaverse--D4AF37?style=flat-square" alt="metaverse">  <img src="https://img.shields.io/badge/infrastructure--D4AF37?style=flat-square" alt="infrastructure">  <img src="https://img.shields.io/badge/constitution--D4AF37?style=flat-square" alt="constitution">
 </p>
 
 <blockquote align="center">
@@ -14,7 +14,7 @@
 
 ## ✦ About
 
-<p style="font-size:15px;line-height:1.8;color:#2C2C2C">SPL-VIRTUAL-WORLD-BASE 是虚拟世界与元宇宙的基础设施框架，以「宪法—法律—Bridge」三层架构为基座，为虚拟空间提供可治理、可互操作、可演化的运行底座。它让不同世界之间的资产、规则与代理得以稳定桥接与协同。</p>
+<p style="font-size:15px;line-height:1.8;color:#2C2C2C">SPL-VIRTUAL-WORLD-BASE is the infrastructure framework for virtual worlds and metaverses, built on a three-layer architecture — Constitution, Law, and Bridge — providing a governable, interoperable, and evolvable runtime foundation for virtual spaces. It enables stable bridging and collaboration of assets, rules, and agents across different worlds.</p>
 
 <p align="center">
   <img src="assets/overview.svg" alt="SPL-VIRTUAL-WORLD-BASE overview" style="width:100%">
