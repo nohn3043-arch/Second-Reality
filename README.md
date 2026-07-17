@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="SPL-VIRTUAL-WORLD-BASE banner" style="width:100%">
+  <img src="assets/banner.png" alt="SPL-虚拟世界基地横幅" style="width:100%">
 </p>
 
 <p align="center">
@@ -17,7 +17,7 @@
 <p style="font-size:15px;line-height:1.8;color:#2C2C2C">SPL-VIRTUAL-WORLD-BASE is the infrastructure framework for virtual worlds and metaverses, built on a three-layer architecture — Constitution, Law, and Bridge — providing a governable, interoperable, and evolvable runtime foundation for virtual spaces. It enables stable bridging and collaboration of assets, rules, and agents across different worlds.</p>
 
 <p align="center">
-  <img src="assets/overview.svg" alt="SPL-VIRTUAL-WORLD-BASE overview" style="width:100%">
+  <img src="assets/overview.png" alt="SPL-虚拟世界基础概述" style="width:100%">
 </p>
 
 </div>
@@ -62,7 +62,7 @@ SPL-Virtual-world-base/
 ├── compatibility_bridge.py      # legacy-world "customs": semantic wash + physics/soul checks
 ├── virtual_world.py             # runtime: economy, tasks, agents
 ├── law/                         # Communication / Economic / Identity / Physics standards
-├── assets/                      # banner.svg, overview.svg
+├── assets/                      # banner.svg/png, overview.svg/png
 └── LICENSE
 ```
 
