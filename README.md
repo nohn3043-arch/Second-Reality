@@ -121,7 +121,7 @@ while world.running:
 
 **申请授权**：
 - 国际/全球：ai@nohnlins.com
-- 中国：ai@tx.nohnlins.com
+- 中国：lin@secondai.top
 
 完整的许可条款请参见 [LICENSE](./LICENSE) 文件。
 
