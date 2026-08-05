@@ -137,7 +137,7 @@ class NohnVisualApp:
             self.canvas.create_text((x1+x2)/2, (y1+y2)/2+25, text=f"{a.name}\n${a.wallet}", tags="agent", font=("Arial", 8))
             
             # 审计输出
-            self.audit_log.insert(tk.END, f"审计对象: {a.name} | Nonce: {report['account']['nonce']}\n")
+            self.audit_log.insert(tk.END, f"审计对象: {a.name} | Nonce: {report['responsibility_account']['nonce']}\n")
             self.audit_log.insert(tk.END, f"└─ 剥离逻辑: {report['analysis']['NarrativeStripping']['logic']}\n\n")
             self.audit_log.see(tk.END)
 
