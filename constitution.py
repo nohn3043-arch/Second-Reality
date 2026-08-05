@@ -3,7 +3,6 @@
 # v2.0: 新增第零章——世界构成公理。一个世界必须先存在，才能被治理。
 
 from typing import List, Dict, Any, Optional
-from enum import Enum
 import uuid
 from dataclasses import dataclass, asdict
 
@@ -155,6 +154,7 @@ class SpatialSubstrate:
         """验证给定坐标是否在此空间的合法范围内"""
         if len(coordinates) != self.dimensions:
             return False
+        return True
 
     def distance(self, point_a: List[float], point_b: List[float]) -> float:
         """计算两点间的空间距离——依赖于拓扑和坐标系定义"""

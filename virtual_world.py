@@ -122,14 +122,15 @@ class NohnVisualApp:
     def step(self):
         self.canvas.delete("agent")
         for a in self.world.agents:
-            a.needs["food"] -= 0.2 # 熵增：饥饿感增加
+            a.needs["food"] = max(0.0, a.needs["food"] - 0.2)  # 熵增：饥饿感增加，钳位≥0
             decision = a.decide()
             report = self.world.engine.audit(decision["logic_ctx"])
             
             # 执行任务逻辑
             a.location = decision["target"]
-            if decision["task"] == "GATHER": a.needs["food"] = 1.0
-            if decision["task"] == "WORK": a.wallet += 15
+            if decision["task"] == "GATHER": a.needs["food"] = min(1.0, a.needs["food"] + 1.0)
+            if decision["task"] == "WORK": a.wallet = max(0, a.wallet + 15)
+            if decision["task"] == "EXPLORE": a.wallet = max(0, a.wallet + 5)
             
             # 渲染
             x1, y1, x2, y2 = self.world.map[a.location]["pos"]
