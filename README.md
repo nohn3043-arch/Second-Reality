@@ -27,10 +27,20 @@
 ## ✦ Quick Start
 
 ```bash
-git clone git@github.com:NOHN-AI/SPL-VIRTUAL-WORLD-BASE.git
-cd SPL-VIRTUAL-WORLD-BASE
+git clone git@github.com:NOHN-AI/SPL-virtual-world-base.git
+cd SPL-virtual-world-base
 # Pure Python ≥3.8 — standard library only, nothing to install
-python virtual_world.py --init demo
+# Launch the GUI demo (requires a graphical environment; spawns two built-in agents)
+python virtual_world.py
+```
+
+Programmatic start:
+
+```python
+from virtual_world import NohnWorld, NohnVisualApp
+nexus = NohnWorld()
+nexus.spawn("Explorer_01", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+NohnVisualApp(nexus).root.mainloop()
 ```
 
 <p align="center">— ✦ —</p>
