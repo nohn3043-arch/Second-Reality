@@ -63,7 +63,7 @@ class TaskGenerator:
                 return {"type": "BUY", "target": "The_Agora", "item": "Bread"}
             return {"type": "GATHER", "target": "Origins", "reward": 20}
         if agent.wallet < 15:
-            return {"type": "WORK", "target": "Iron_Vault", "reward_coin": 15}
+            return {"type": "WORK", "target": "Iron_Vault", "reward": 15}
         return {"type": "EXPLORE", "target": "The_Agora", "reward": 5}
 
 # ==============================================
@@ -209,11 +209,11 @@ class NohnWorld:
                        "hedge": "BUY/GATHER fallback"}))
 
     def spawn(self, name, soul_hash, wallet=20):
-        if len(soul_hash) == 64:
-            a = NohnAgent(name, soul_hash, self, wallet=wallet)
-            self.agents.append(a)
-            return a
-        return None
+        if len(soul_hash) != 64:
+            raise ValueError(f"spawn: soul_hash 长度必须为 64（SHA-256 十六进制），实际为 {len(soul_hash)}")
+        a = NohnAgent(name, soul_hash, self, wallet=wallet)
+        self.agents.append(a)
+        return a
 
     def spawn_demo_agents(self):
         # 差异化初始财富：穷(6) / 中(20) / 富(45)，驱动不同行为路径
