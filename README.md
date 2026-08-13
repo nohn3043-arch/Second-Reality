@@ -7,14 +7,14 @@
 </p>
 
 <blockquote align="center">
-  <em>Virtual World &amp; Metaverse Infrastructure Foundation</em>
+  <em>虚拟世界与元宇宙基础设施底座</em>
 </blockquote>
 
 <div style="max-width:880px;margin:0 auto;padding:0 16px">
 
-## ✦ About
+## ✦ 关于
 
-<p style="font-size:15px;line-height:1.8;color:#2C2C2C">SPL-VIRTUAL-WORLD-BASE is the infrastructure framework for virtual worlds and metaverses, built on a three-layer architecture — Constitution, Law, and Bridge — providing a governable, interoperable, and evolvable runtime foundation for virtual spaces. It enables stable bridging and collaboration of assets, rules, and agents across different worlds.</p>
+<p style="font-size:15px;line-height:1.8;color:#2C2C2C">SPL-VIRTUAL-WORLD-BASE 是虚拟世界与元宇宙的基础设施框架，构建于「宪法 / 法律 / 审计 / 系统」四层架构之上，为虚拟空间提供可治理、可互操作、可演进的运行时底座。它支持不同世界之间资产、规则与智能体的稳定桥接与协作。</p>
 
 <p align="center">
   <img src="assets/overview.png" alt="SPL-Virtual-World-Base overview" style="width:100%">
@@ -24,17 +24,17 @@
 
 <p align="center">— ✦ —</p>
 
-## ✦ Quick Start
+## ✦ 快速开始
 
 ```bash
 git clone git@github.com:NOHN-AI/SPL-virtual-world-base.git
 cd SPL-virtual-world-base
-# Pure Python ≥3.8 — standard library only, nothing to install
-# Launch the GUI demo (requires a graphical environment; spawns two built-in agents)
+# 纯 Python ≥3.8，仅标准库，无需安装任何依赖
+# 启动 GUI 演示（需要图形环境；默认生成两个内置智能体）
 python virtual_world.py
 ```
 
-Programmatic start:
+程序化启动：
 
 ```python
 from virtual_world import NohnWorld, NohnVisualApp
@@ -45,93 +45,50 @@ NohnVisualApp(nexus).root.mainloop()
 
 <p align="center">— ✦ —</p>
 
-## ✦ Architecture
+## ✦ 架构
 
 <div style="max-width:880px;margin:0 auto;padding:0 16px">
 
-The stack is organized as four separable layers, so that rules (read-only), the auditor (neutral referee), the system (implementation), and the demo client never conflate:
+系统按四层分离组织，确保规则（只读）、审计员（中立裁判）、系统（实现）、演示客户端互不混层：
 
-- **Constitution rules** (`constitution_rules.py`) — the primordial axioms and ten governance laws, permanently locked as the root trust anchor. `NOHN_LAW_AXIOMS` is the single authoritative source for all constants.
-- **Audit engine** (`audit_engine.py`) — the second-perspective cognitive auditor (`ResponsibilityAccount` + pluggable `AuditPlugin`s + `SecondPerspectiveAuditor` with an 18-dimension compliance review). It is the *referee*, not part of the world.
-- **Law** (`law/`) — four standard layers:
-  - *Communication protocol standard*
-  - *Global economic unified standard* — currency, peg, proof-of-reserve, redemption
-  - *Identity attestation standard* — soul-hash bound identity
-  - *Physics baseline standard* — gravity / time / scale constants
-- **System** (`system/`) — the real implementation layer: persistent ledger, ≥2/3 referendum consensus, agent engine, headless runtime, REST/WS API, machine-readable protocol schemas, and production security.
-- **Bridge** (`compatibility_bridge.py`) — the only "customs" through which legacy worlds join Nohn territory:
-  - `translate_intent()` — semantic wash: maps vendor-private instructions to the Nohn standard vocabulary, stripping hidden interpretation rights.
-  - `check_physics_constants()` — rejects worlds whose physics constants diverge from `NOHN_LAW_AXIOMS`.
-  - `verify_soul_hash()` — verifies identity against the soul-hash anchor.
+- **宪法规则**（`constitution_rules.py`）—— 世界的原始公理与十条治理法则，永久锁定为根信任锚点。`NOHN_LAW_AXIOMS` 是所有常量的唯一权威来源。
+- **审计引擎**（`audit_engine.py`）—— 第二视角认知审计器（`ResponsibilityAccount` + 可插拔 `AuditPlugin` + `SecondPerspectiveAuditor` 18 项合规审查）。它是裁判，不是世界本体。
+- **法律**（`law/`）—— 四大标准层：
+  - 通信协议规范
+  - 全球经济统一标准 —— 货币、锚定、储备证明、赎回
+  - 身份确权规范 —— 灵魂哈希绑定身份
+  - 物理基准规范 —— 重力 / 时间 / 尺度常数
+- **系统**（`system/`）—— 真实实现层：持久化账本、≥2/3 公投共识、智能体引擎、无头运行时、REST/WS API、机器可读协议 Schema、生产级安全。
+- **桥接**（`compatibility_bridge.py`）—— 旧世界进入 Nohn 领地的唯一「海关」：
+  - `translate_intent()` —— 语义洗白：将厂商私有指令映射到 Nohn 标准词汇表，剥夺隐藏解释权。
+  - `check_physics_constants()` —— 拒绝物理常数偏离 `NOHN_LAW_AXIOMS` 的世界。
+  - `verify_soul_hash()` —— 依据灵魂哈希锚点校验身份。
 
-The demo runtime (`virtual_world.py`) wires these together with an `EconomySystem`, `TaskGenerator`, and `NohnAgent`, mounted on the real `system.World`.
+演示运行时（`virtual_world.py`）将这些组件与 `EconomySystem`、`TaskGenerator`、`NohnAgent` 串联，并挂载在真实的 `system.World` 之上。
 
 </div>
 
-## ✦ Architecture Modules
+## ✦ 企业使用
 
-Every class below is verified against the current source. Grouped by the six layers of the Nohn™ world stack:
+本底座是「协议监护人 + 参考实现」，不是单一运营方平台。企业可通过以下三种方式接入：
 
-| Layer | Module (class) | Responsibility |
-|---|---|---|
-| **Constitution** | `SpatialSubstrate` | world topology, dimensions, boundaries, minimal units |
-| | `TemporalSubstrate` | time flow and event sequencing |
-| | `CausalClosure` | causal-chain tracking, external intervention detection |
-| | `ExistenceAxiom` | entity creation, verification, and destruction |
-| | `GenesisCondition` | world initialization and integrity validation |
-| | `ImmutableWorldRule` | rules that require global referendum to amend |
-| | `WorldCentralBrain` | central coordination of world subsystems |
-| **Soul** | `SoulAttestation` | soul registration and verification |
-| | `SoulLedger` | identity ledger |
-| | `MemoryInalienability` | memory non-seizability |
-| | `MemoryGuardian` | memory sealing and tamper detection |
-| | `IndependentWill` | autonomous will (MARL-based, not behavior trees) |
-| | `MemoryVault` | secure memory storage |
-| **Audit** | `ResponsibilityAccount` | named accountability for every governance action |
-| | `AuditPlugin` | pluggable audit checks |
-| | `CognitiveAuditEngine` | cognitive-audit engine core |
-| | `SecondPerspectiveAuditor` | comprehensive compliance review |
-| | `DecentralizationGovernance` | decentralized governance |
-| | `AestheticCompliance` | aesthetic/rendering compliance |
-| | `AuditReport` | structured audit report |
-| **Perpetuity** | `WorldPerpetuity` | eternal world-running record |
-| | `HistoryLedger` | history ledger |
-| | `SnapshotRegistry` | snapshot registration and recovery |
-| **Interoperability** | `NohnCompatibilityBridge` | cross-world bridge protocol |
-| | `MandatoryInteroperability` | mandatory interop protocol |
-| | `UniversalVocabulary` | universal semantic vocabulary |
-| | `PhysicsBaseline` | physics baseline alignment |
-| | `IdentityProtocol` | identity protocol compatibility |
-| | `EconomicBaseline` | economic standard compliance |
-| **Runtime** | `NohnWorld` | world container |
-| | `NohnAgent` | agent |
-| | `EconomySystem` | economy system |
-| | `TaskGenerator` | task generation |
-| | `NohnVisualApp` | visualization app |
-| | `ConsensusEngine` | consensus among world actors |
-| | `SimulationEngine` | world simulation loop |
+### A. 协议参与者（自托管，数据留在本地）
 
-## ✦ Enterprise Usage
-
-The base is a **protocol guardian + reference implementation**, not a single-operator platform. An enterprise integrates in one of three ways:
-
-### A. Protocol Participant (self-hosted, data stays on-premise)
-
-Run your own implementation inside your own data center, conforming to the four `law/` standards, and validate on-boarding before joining the network:
+在自己的数据中心运行自有实现，遵循 `law/` 四大标准，并在并网前通过审查：
 
 ```python
 from system.protocol import ProtocolValidator
 
 ok, failures = ProtocolValidator().validate(world_config)
-# ok=True  -> on-board to the Nohn network
-# ok=False -> isolated at the failed layer(s)
+# ok=True  -> 并网加入 Nohn 网络
+# ok=False -> 在失败层被隔离
 ```
 
-**Hard constraint**: your raw data (souls, assets, memories, world state) never leaves your data center. The protocol layer exchanges only verifiable proofs — hashes, signatures, Merkle roots, proof-of-reserve — never raw data.
+**硬约束**：你的原始数据（灵魂、资产、记忆、世界状态）永不离开你的数据中心。协议层只交换可验证证明 —— 哈希、签名、Merkle 根、储备证明 —— 绝不交换原始数据。
 
-### B. Reference Implementation (embedded)
+### B. 参考实现（嵌入式）
 
-Use the audited reference world directly:
+直接使用已审计的参考世界：
 
 ```python
 from system.runtime import World
@@ -139,57 +96,57 @@ from system.runtime import World
 world = World("my-world", data_dir="./my_data")
 world.spawn_agent("ab" * 32)
 world.tick()
-print(world.audit_summary())   # 18-dimension second-perspective audit
+print(world.audit_summary())   # 18 项第二视角审计
 ```
 
-### C. API Integration (REST + WebSocket)
+### C. API 集成（REST + WebSocket）
 
-Run the service and integrate over HTTP:
+启动服务并通过 HTTP 集成：
 
 ```python
 from system.api import serve
 serve(world, host="0.0.0.0", port=8000)
 ```
 
-Key endpoints: `GET /health`, `GET /world`, `GET /audit`, `POST /protocol/validate`, `POST /agent/spawn`, `POST /auth/issue`, `GET/POST /economy/*`, `WS /ws/world`.
+关键端点：`GET /health`、`GET /world`、`GET /audit`、`POST /protocol/validate`、`POST /agent/spawn`、`POST /auth/issue`、`GET/POST /economy/*`、`WS /ws/world`。
 
-### Customization boundary
+### 定制边界
 
-Enterprise-specific differences live in the **configuration layer** (industry parameters, jurisdiction, deployment topology) — never in the core constitution, audit, or consensus rules, which remain identical for every enterprise.
+企业特有差异落在「配置层」（行业参数、司法辖区、部署拓扑）—— 绝不触碰核心宪法、审计、共识规则，这些对所有企业保持完全一致。
 
 <p align="center">— ✦ —</p>
 
-## ✦ Project Structure
+## ✦ 项目结构
 
 ```
 SPL-Virtual-world-base/
-├── constitution_rules.py        # constitution rules: axioms + ten governance laws + NOHN_LAW_AXIOMS
-├── audit_engine.py              # second-perspective auditor: 18-dimension compliance review
-├── constitution.py              # thin aggregate layer (backward-compatible re-export)
-├── compatibility_bridge.py      # legacy-world "customs": semantic wash + physics/soul checks
-├── virtual_world.py             # demo runtime (GUI/headless), mounted on system.World
-├── system/                      # real implementation layer
-│   ├── ledger.py                #   persistent Soul/History/Economic ledger (SQLite)
-│   ├── consensus.py             #   ≥2/3 referendum consensus + governance
-│   ├── agent_engine.py          #   need-driven agents + memory sealing
-│   ├── runtime.py               #   genesis assembly + tick loop + audit report
-│   ├── api.py                   #   REST + WebSocket + HMAC auth
-│   ├── protocol.py              #   machine-readable law schemas + validator
-│   └── keys.py                  #   signing key management
-├── law/                         # Communication / Economic / Identity / Physics standards
+├── constitution_rules.py        # 宪法规则：公理 + 十条治理法则 + NOHN_LAW_AXIOMS
+├── audit_engine.py              # 第二视角审计器：18 项合规审查
+├── constitution.py              # 薄聚合层（向后兼容 re-export）
+├── compatibility_bridge.py      # 旧世界「海关」：语义洗白 + 物理/灵魂校验
+├── virtual_world.py             # 演示运行时（GUI/headless），挂载于 system.World
+├── system/                      # 真实实现层
+│   ├── ledger.py                #   持久化灵魂/历史/经济账本（SQLite）
+│   ├── consensus.py             #   ≥2/3 公投共识 + 治理
+│   ├── agent_engine.py          #   需求驱动智能体 + 记忆封存
+│   ├── runtime.py               #   创世装配 + tick 循环 + 审计上报
+│   ├── api.py                   #   REST + WebSocket + HMAC 鉴权
+│   ├── protocol.py              #   机器可读法律 Schema + 验证器
+│   └── keys.py                  #   签名密钥管理
+├── law/                         # 通信 / 经济 / 身份 / 物理标准
 ├── assets/                      # banner.svg/png, overview.svg/png
 └── LICENSE
 ```
 
-## ✦ License & Authorization
+## ✦ 许可与授权
 
-This repository is **not open-source**. Dual-track model: free for individual non-commercial research; paid commercial authorization required for government / enterprise. See [LICENSE](./LICENSE).
+本仓库**非开源**。双轨制：个人非商业研究免费；政府/企业需付费商业授权。详见 [LICENSE](./LICENSE)。
 
-**Trademark notice**: "Nohn™" and "Second Perspective™" are unregistered trademarks in the virtual-world domain, protected under unfair-competition law and common-law passing-off doctrine. Any unauthorized commercial use constitutes infringement.
+**商标声明**：「Nohn™」与「Second Perspective™」是虚拟世界领域的未注册商标，受反不正当竞争法与普通法仿冒原则保护。任何未经授权的商业使用均构成侵权。
 
-**Licensing inquiries**:
-- International / global: ai@nohnlins.com
-- China: lin@secondai.top
+**授权咨询**：
+- 国际/全球：ai@nohnlins.com
+- 中国：lin@secondai.top
 
 <p align="center">
   <a href="https://github.com/NOHN-AI">NOHN-AI</a>
