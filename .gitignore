@@ -1,3 +1,7 @@
 node_modules/
 __pycache__/
 *.pyc
+# 系统层运行时数据（SQLite 账本，进程重启持久化）
+.world_data/
+# 本地工作记忆（CodeBuddy 会话数据，不提交）
+.codebuddy/

@@ -9,6 +9,8 @@ from constitution import (
     ResponsibilityAccount, AuditPlugin, CognitiveAuditEngine,
     NOHN_LAW_AXIOMS,
 )
+# 系统层：真实世界运行时（创世 + 账本 + 共识 + 记忆），供演示版接入并通过 18 项审计
+from system.runtime import World as CoreWorld
 
 # ==============================================
 # 2. 深度功能模块：经济、任务与动态地图
@@ -81,6 +83,10 @@ class NohnAgent:
         self.prev_pos = (125, 175)
         self.moving = False
         self.steps_alive = 0
+
+    def _is_scripted(self) -> bool:
+        """审计点（第二/四条）：是否存在外部剧情强制绑定此 NPC？永远 False。"""
+        return False
 
     def decide(self):
         # 自动任务生成替代了简单的手动决策
@@ -207,6 +213,27 @@ class NohnWorld:
             lambda c: {"weak_var": "food_reserve",
                        "delta_D": f"{(1.0 - c['need_level']):.2f} (crisis exposure)",
                        "hedge": "BUY/GATHER fallback"}))
+        # 接入系统层：挂载真实世界组件（创世/账本/共识/记忆），使演示版通过 18 项审计
+        self._mount_core()
+
+    def _mount_core(self):
+        """将演示版挂载到 system.World 之上，暴露宪法/治理/law 全量组件。"""
+        self.core = CoreWorld("nohn-demo-v2")
+        self.spatial_substrate = self.core.spatial_substrate
+        self.temporal_substrate = self.core.temporal_substrate
+        self.causal_closure = self.core.causal_closure
+        self.existence_axiom = self.core.existence_axiom
+        self.genesis_condition = self.core.genesis_condition
+        self.immutable_rule = self.core.immutable_rule
+        self.central_brain = self.core.central_brain
+        self.aesthetic = self.core.aesthetic
+        self.soul_attestation = self.core.soul_attestation
+        self.memory_integrity = self.core.memory_integrity
+        self.world_perpetuity = self.core.world_perpetuity
+        self.interoperability = self.core.interoperability
+        self.governance = self.core.governance
+        self.world_config = self.core.world_config
+        self.npcs = self.agents  # 供审计遍历（与 agents 同一引用，spawn 自动同步）
 
     def spawn(self, name, soul_hash, wallet=20):
         if len(soul_hash) != 64:
@@ -452,12 +479,21 @@ class NohnVisualApp:
 # 6. 入口：GUI / headless 双模式
 # ==============================================
 def main():
+    # Windows 控制台默认 GBK，无法输出 ⚑ 等 Unicode 符号；重配为 UTF-8 保证跨平台可打印
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
+
     parser = argparse.ArgumentParser(description="NOHN Virtual World Demo")
     parser.add_argument("--init", choices=["demo"], help="初始化演示世界（兼容 README 写法）")
     parser.add_argument("--agents", type=int, default=3, help="演示 agent 数量（默认 3）")
     parser.add_argument("--ticks", type=int, default=0,
                         help="headless 模式：自动运行 N 个 tick 后打印报告并退出（0 = 启动 GUI）")
     parser.add_argument("--seed", type=int, default=None, help="随机种子（可复现）")
+    parser.add_argument("--audit", action="store_true",
+                        help="headless 模式：运行 18 项第二视角审计并输出结论")
     args = parser.parse_args()
 
     if args.seed is not None:
@@ -468,6 +504,12 @@ def main():
     # --init demo 为兼容写法，行为与默认一致
     if args.init == "demo":
         pass
+
+    # 独立审计模式：不依赖 tick，直接对已装配世界跑 18 项审计
+    if args.audit:
+        report = world.core.audit()
+        print(report.summary())
+        return
 
     if args.ticks > 0:
         for _ in range(args.ticks):

@@ -42,7 +42,7 @@
 - 预言机签名须上链可验证；异常波动触发熔断与人工复核。
 
 ## 6. 资产标识 Schema（供审计与跨世界校验）
-- `soul_hash`：SHA-256，64 位十六进制，绑定 `GlobalIdentity`（见 constitution.py / 宪法第六条）。
+- `soul_hash`：SHA-256，64 位十六进制，绑定 `GlobalIdentity`（见 constitution_rules.py / 宪法第六条）。
 - `ASSET_ID`：格式 `ASSET-<chain>-<sha256(creator|timestamp|seq)>`，全局唯一。
 - `nft_dna`：链上资产指纹（如 BTC 的 `txid:index`），不可伪造、可链上核验。
 
