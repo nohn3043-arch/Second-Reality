@@ -45,22 +45,26 @@ NohnVisualApp(nexus).root.mainloop()
 
 <p align="center">— ✦ —</p>
 
-## ✦ Three-Layer Architecture
+## ✦ Architecture
 
 <div style="max-width:880px;margin:0 auto;padding:0 16px">
 
-- **Constitution** (`constitution.py`) — the primordial axioms of the virtual world, permanently locked as the root trust anchor. Embeds a ported **cognitive-audit engine** (`ResponsibilityAccount` + pluggable `AuditPlugin`s) so every governance action is accountable.
+The stack is organized as four separable layers, so that rules (read-only), the auditor (neutral referee), the system (implementation), and the demo client never conflate:
+
+- **Constitution rules** (`constitution_rules.py`) — the primordial axioms and ten governance laws, permanently locked as the root trust anchor. `NOHN_LAW_AXIOMS` is the single authoritative source for all constants.
+- **Audit engine** (`audit_engine.py`) — the second-perspective cognitive auditor (`ResponsibilityAccount` + pluggable `AuditPlugin`s + `SecondPerspectiveAuditor` with an 18-dimension compliance review). It is the *referee*, not part of the world.
 - **Law** (`law/`) — four standard layers:
   - *Communication protocol standard*
   - *Global economic unified standard* — currency, peg, proof-of-reserve, redemption
   - *Identity attestation standard* — soul-hash bound identity
   - *Physics baseline standard* — gravity / time / scale constants
+- **System** (`system/`) — the real implementation layer: persistent ledger, ≥2/3 referendum consensus, agent engine, headless runtime, REST/WS API, machine-readable protocol schemas, and production security.
 - **Bridge** (`compatibility_bridge.py`) — the only "customs" through which legacy worlds join Nohn territory:
   - `translate_intent()` — semantic wash: maps vendor-private instructions to the Nohn standard vocabulary, stripping hidden interpretation rights.
   - `check_physics_constants()` — rejects worlds whose physics constants diverge from `NOHN_LAW_AXIOMS`.
   - `verify_soul_hash()` — verifies identity against the soul-hash anchor.
 
-The runtime (`virtual_world.py`) wires these together with an `EconomySystem`, `TaskGenerator`, and `NohnAgent`.
+The demo runtime (`virtual_world.py`) wires these together with an `EconomySystem`, `TaskGenerator`, and `NohnAgent`, mounted on the real `system.World`.
 
 </div>
 
@@ -107,13 +111,71 @@ Every class below is verified against the current source. Grouped by the six lay
 | | `ConsensusEngine` | consensus among world actors |
 | | `SimulationEngine` | world simulation loop |
 
+## ✦ Enterprise Usage
+
+The base is a **protocol guardian + reference implementation**, not a single-operator platform. An enterprise integrates in one of three ways:
+
+### A. Protocol Participant (self-hosted, data stays on-premise)
+
+Run your own implementation inside your own data center, conforming to the four `law/` standards, and validate on-boarding before joining the network:
+
+```python
+from system.protocol import ProtocolValidator
+
+ok, failures = ProtocolValidator().validate(world_config)
+# ok=True  -> on-board to the Nohn network
+# ok=False -> isolated at the failed layer(s)
+```
+
+**Hard constraint**: your raw data (souls, assets, memories, world state) never leaves your data center. The protocol layer exchanges only verifiable proofs — hashes, signatures, Merkle roots, proof-of-reserve — never raw data.
+
+### B. Reference Implementation (embedded)
+
+Use the audited reference world directly:
+
+```python
+from system.runtime import World
+
+world = World("my-world", data_dir="./my_data")
+world.spawn_agent("ab" * 32)
+world.tick()
+print(world.audit_summary())   # 18-dimension second-perspective audit
+```
+
+### C. API Integration (REST + WebSocket)
+
+Run the service and integrate over HTTP:
+
+```python
+from system.api import serve
+serve(world, host="0.0.0.0", port=8000)
+```
+
+Key endpoints: `GET /health`, `GET /world`, `GET /audit`, `POST /protocol/validate`, `POST /agent/spawn`, `POST /auth/issue`, `GET/POST /economy/*`, `WS /ws/world`.
+
+### Customization boundary
+
+Enterprise-specific differences live in the **configuration layer** (industry parameters, jurisdiction, deployment topology) — never in the core constitution, audit, or consensus rules, which remain identical for every enterprise.
+
+<p align="center">— ✦ —</p>
+
 ## ✦ Project Structure
 
 ```
 SPL-Virtual-world-base/
-├── constitution.py              # world axioms + 6-layer class system (see above)
+├── constitution_rules.py        # constitution rules: axioms + ten governance laws + NOHN_LAW_AXIOMS
+├── audit_engine.py              # second-perspective auditor: 18-dimension compliance review
+├── constitution.py              # thin aggregate layer (backward-compatible re-export)
 ├── compatibility_bridge.py      # legacy-world "customs": semantic wash + physics/soul checks
-├── virtual_world.py             # runtime: world, agents, economy, tasks, visualization
+├── virtual_world.py             # demo runtime (GUI/headless), mounted on system.World
+├── system/                      # real implementation layer
+│   ├── ledger.py                #   persistent Soul/History/Economic ledger (SQLite)
+│   ├── consensus.py             #   ≥2/3 referendum consensus + governance
+│   ├── agent_engine.py          #   need-driven agents + memory sealing
+│   ├── runtime.py               #   genesis assembly + tick loop + audit report
+│   ├── api.py                   #   REST + WebSocket + HMAC auth
+│   ├── protocol.py              #   machine-readable law schemas + validator
+│   └── keys.py                  #   signing key management
 ├── law/                         # Communication / Economic / Identity / Physics standards
 ├── assets/                      # banner.svg/png, overview.svg/png
 └── LICENSE
