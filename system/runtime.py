@@ -152,9 +152,20 @@ class World:
         if len(soul_hash) != 64:
             return None
         with self._lock:
-            # 1. 灵魂确权（SHA-256 唯一）
+            # 1. 灵魂确权（SHA-256 唯一，持久化到 SQLite）
             if not self.soul_ledger.exists(soul_hash):
-                self.soul_ledger.register_soul({"genesis_id": soul_hash})
+                identity = {
+                    "soul_hash": soul_hash,
+                    "soul_hash_sha256": True,
+                    "non_revocable": True,
+                    "cross_world_portable": True,
+                    "asset_bound": True,
+                    "genesis_proof": {"genesis_id": soul_hash},
+                    "created_at": time.time(),
+                    "world_history": [],
+                }
+                self.soul_ledger.souls[soul_hash] = identity
+                self.soul_ledger._flush(soul_hash, identity)
             # 2. 存在公理：创生（需因果 + 位置）
             self.existence_axiom.bring_into_existence(
                 soul_hash, cause="GENESIS",

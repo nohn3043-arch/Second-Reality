@@ -97,8 +97,12 @@ class SoulAuth:
         sig = hmac.new(self._key, payload, hashlib.sha256).digest()
         return f"{_b64url(payload)}.{_b64url(sig)}"
 
-    def verify(self, token: Optional[str]) -> Optional[str]:
-        """校验 token，返回 soul_hash；无效/过期返回 None。"""
+    def verify(self, token: Optional[str],
+               soul_ledger: Optional[Any] = None) -> Optional[str]:
+        """
+        校验 token，返回 soul_hash；无效/过期/灵魂不存在返回 None。
+        若传入 soul_ledger，额外校验 soul_hash 是否已注册到全球身份账本。
+        """
         if not token:
             return None
         if token.startswith("Bearer "):
@@ -112,6 +116,8 @@ class SoulAuth:
             soul_hash, expires_at = payload.decode("utf-8").split(".", 1)
             if int(expires_at) < int(time.time()):
                 return None
+            if soul_ledger is not None and not soul_ledger.exists(soul_hash):
+                return None  # 灵魂未注册，token 无效
             return soul_hash
         except (ValueError, UnicodeDecodeError):
             return None
@@ -129,7 +135,7 @@ class WorldAPI:
     # ---- 路由分发 ----
     def dispatch(self, method: str, path: str, body: Dict, token: Optional[str]) -> tuple:
         """返回 (status, payload_dict)。"""
-        soul = self.auth.verify(token)
+        soul = self.auth.verify(token, self.world.soul_ledger)
 
         # 无需鉴权：健康检查
         if path == "/health":
@@ -195,6 +201,8 @@ class WorldAPI:
             soul_hash = body.get("soul_hash", "")
             if len(soul_hash) != 64:
                 return 400, {"error": "soul_hash 必须为 64 位"}
+            if not self.world.soul_ledger.exists(soul_hash):
+                return 403, {"error": "soul_hash 未注册到灵魂账本，请先创建智能体"}
             return 200, {"token": self.auth.issue(soul_hash)}
 
         # ---- 互认协议 ----

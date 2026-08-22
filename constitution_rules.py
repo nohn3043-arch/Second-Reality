@@ -589,6 +589,17 @@ class SoulAttestation:
         注册一个新的数字生命
         条件：sha256 签名合规 + 无冲突 + 不可重复注册
         """
+        soul_hash = genesis_proof.get("soul_hash", "")
+        if len(soul_hash) != 64:
+            return False
+        if self.soul_ledger.exists(soul_hash):
+            return False  # 不可重复注册
+        self.soul_ledger.souls[soul_hash] = {
+            "soul_hash": soul_hash,
+            "created_at": genesis_proof.get("timestamp", 0),
+            "identity": genesis_proof.get("identity", {}),
+            "cross_world_records": [],
+        }
         return True
 
     def validate_soul(self, soul_hash: str) -> bool:
