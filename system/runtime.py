@@ -35,7 +35,11 @@ from constitution_rules import (
 from audit_engine import SecondPerspectiveAuditor, AuditReport
 
 from .ledger import (
-    Storage, SoulLedger, HistoryLedger, EconomicReserve, SnapshotRegistry,
+    Storage,
+    SoulLedger,
+    HistoryLedger,
+    EconomicReserve,
+    SnapshotRegistry,
 )
 from .consensus import ConsensusNetwork, Governance
 from .agent_engine import MemoryVault, MemoryInalienability, Agent
@@ -44,8 +48,12 @@ from .agent_engine import MemoryVault, MemoryInalienability, Agent
 class World:
     """运行态世界：创世装配后的可审计实例，供 18 项审计消费。"""
 
-    def __init__(self, world_id: str, data_dir: Optional[str] = None,
-                 initial_oracles: Optional[List[str]] = None):
+    def __init__(
+        self,
+        world_id: str,
+        data_dir: Optional[str] = None,
+        initial_oracles: Optional[List[str]] = None,
+    ):
         self.world_id = world_id
         self.storage = Storage(data_dir=data_dir)
         # 并发保护：ThreadingHTTPServer 多线程下 tick/spawn 串行化，防状态竞态
@@ -55,7 +63,7 @@ class World:
         self.soul_ledger = SoulLedger(storage=self.storage)
         self.history = HistoryLedger(storage=self.storage)
         self.economy = EconomicReserve(storage=self.storage)
-        for o in (initial_oracles or ["oracle_a", "oracle_b", "oracle_c"]):
+        for o in initial_oracles or ["oracle_a", "oracle_b", "oracle_c"]:
             self.economy.register_oracle(o)
         self.snapshot_registry = SnapshotRegistry(storage=self.storage)
         self.memory_vault = MemoryVault(storage=self.storage)
@@ -77,7 +85,7 @@ class World:
         self.soul_attestation = SoulAttestation()
         self.soul_attestation.soul_ledger = self.soul_ledger  # 注入真实账本
         self.world_perpetuity = WorldPerpetuity()
-        self.world_perpetuity.history_chain = self.history      # 注入真实历史链
+        self.world_perpetuity.history_chain = self.history  # 注入真实历史链
         self.world_perpetuity.snapshot_registry = self.snapshot_registry
         self.interoperability = MandatoryInteroperability()
 
@@ -117,7 +125,7 @@ class World:
 
         # ---- 运行态实体 ----
         self.npcs: Dict[str, Agent] = {}
-        self.main_quest = None            # 无主线（审计第四条）
+        self.main_quest = None  # 无主线（审计第四条）
         self.genesis_completed = False
 
         self._bootstrap_genesis()
@@ -129,10 +137,13 @@ class World:
         for i in range(3):
             self.consensus.register_node(f"node_{i:03d}", signature=None)
         # 创世区块
-        genesis_block = self.history.append({
-            "event": "genesis", "world_id": self.world_id,
-            "timestamp": time.time(),
-        })
+        genesis_block = self.history.append(
+            {
+                "event": "genesis",
+                "world_id": self.world_id,
+                "timestamp": time.time(),
+            }
+        )
         # 创世灵魂（可为空，但必须显式声明）
         genesis_souls: List[str] = []
         genesis_config = {
@@ -147,11 +158,17 @@ class World:
         self.genesis_completed = self.genesis_condition.initiate_genesis(genesis_config)
 
     # ---- 世界演化 ----
-    def spawn_agent(self, soul_hash: str, personality: Optional[Dict] = None) -> Optional[Agent]:
-        """创生一个智能体：注册灵魂 + 记录存在 + 建立因果 + 绑定记忆。"""
+    def spawn_agent(
+        self, soul_hash: str, personality: Optional[Dict] = None
+    ) -> Optional[Agent]:
+        """创生一个智能体：注册灵魂 + 记录存在 + 建立因果 + 绑定记忆。
+        已存在的灵魂返回已有 Agent，不覆盖需求状态和行动历史。"""
         if len(soul_hash) != 64:
             return None
         with self._lock:
+            # 已存在则直接返回，不覆盖
+            if soul_hash in self.npcs:
+                return self.npcs[soul_hash]
             # 1. 灵魂确权（SHA-256 唯一，持久化到 SQLite）
             if not self.soul_ledger.exists(soul_hash):
                 identity = {
@@ -168,13 +185,17 @@ class World:
                 self.soul_ledger._flush(soul_hash, identity)
             # 2. 存在公理：创生（需因果 + 位置）
             self.existence_axiom.bring_into_existence(
-                soul_hash, cause="GENESIS",
-                initial_state={"alive": True}, location=[0.0, 0.0, 0.0],
+                soul_hash,
+                cause="GENESIS",
+                initial_state={"alive": True},
+                location=[0.0, 0.0, 0.0],
             )
             # 3. 因果闭包：创生事件挂到创世
             self.causal_closure.link_cause(f"spawn:{soul_hash}", ["GENESIS"])
             # 4. 智能体实例
-            agent = Agent(soul_hash, personality=personality, memory_vault=self.memory_vault)
+            agent = Agent(
+                soul_hash, personality=personality, memory_vault=self.memory_vault
+            )
             self.npcs[soul_hash] = agent
             return agent
 
@@ -204,12 +225,18 @@ class World:
 
     # ---- 快照 ----
     def snapshot(self) -> str:
-        return self.snapshot_registry.create_snapshot({
-            "world_id": self.world_id,
-            "clock": self.temporal_substrate.global_clock,
-            "souls": list(self.soul_ledger.souls.keys()),
-            "agents": list(self.npcs.keys()),
-        })
+        return self.snapshot_registry.create_snapshot(
+            {
+                "world_id": self.world_id,
+                "clock": self.temporal_substrate.global_clock,
+                "souls": list(self.soul_ledger.souls.keys()),
+                "agents": list(self.npcs.keys()),
+            }
+        )
+
+    def close(self) -> None:
+        """关闭世界，释放 SQLite 连接等底层资源。"""
+        self.storage.close()
 
 
 __all__ = ["World"]

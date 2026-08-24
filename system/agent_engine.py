@@ -33,7 +33,9 @@ class MemoryGuardian:
             soul_hash.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
         ).hexdigest()
 
-    def verify_memory(self, memory: Dict, seal: str, soul_hash: Optional[str] = None) -> bool:
+    def verify_memory(
+        self, memory: Dict, seal: str, soul_hash: Optional[str] = None
+    ) -> bool:
         """验证记忆完整性。若提供 soul_hash 则做密码学校验，否则降级为结构校验。"""
         if soul_hash:
             return hmac.compare_digest(self.seal_memory(memory, soul_hash), seal)
@@ -43,7 +45,9 @@ class MemoryGuardian:
 class MemoryVault:
     """长期记忆库：按 soul_hash 存取，持久化。"""
 
-    def __init__(self, storage: Optional[Storage] = None, data_dir: Optional[str] = None):
+    def __init__(
+        self, storage: Optional[Storage] = None, data_dir: Optional[str] = None
+    ):
         self._storage = storage or Storage(data_dir=data_dir)
         self._storage.execute(
             "CREATE TABLE IF NOT EXISTS memories ("
@@ -63,10 +67,13 @@ class MemoryVault:
         )
         return seal
 
-    def recall_memory(self, soul_hash: str, context: Optional[str] = None) -> List[Dict]:
+    def recall_memory(
+        self, soul_hash: str, context: Optional[str] = None
+    ) -> List[Dict]:
         """按灵魂检索记忆。context 可选做简单关键词过滤。"""
         rows = self._storage.query(
-            "SELECT memory, seal FROM memories WHERE soul_hash=? ORDER BY seq", (soul_hash,)
+            "SELECT memory, seal FROM memories WHERE soul_hash=? ORDER BY seq",
+            (soul_hash,),
         )
         out = []
         for mem_json, seal in rows:
@@ -79,7 +86,8 @@ class MemoryVault:
     def verify_all(self, soul_hash: str) -> bool:
         """校验某灵魂的全部记忆是否被篡改。"""
         rows = self._storage.query(
-            "SELECT memory, seal FROM memories WHERE soul_hash=? ORDER BY seq", (soul_hash,)
+            "SELECT memory, seal FROM memories WHERE soul_hash=? ORDER BY seq",
+            (soul_hash,),
         )
         for mem_json, seal in rows:
             mem = json.loads(mem_json)
@@ -91,7 +99,9 @@ class MemoryVault:
 class MemoryInalienability:
     """第七条：记忆不可剥夺。全量导出 + 篡改检测。"""
 
-    def __init__(self, vault: Optional[MemoryVault] = None, data_dir: Optional[str] = None):
+    def __init__(
+        self, vault: Optional[MemoryVault] = None, data_dir: Optional[str] = None
+    ):
         self.memory_vault = vault or MemoryVault(data_dir=data_dir)
 
     def export_memory(self, soul_hash: str) -> Dict:
@@ -107,16 +117,29 @@ class MemoryInalienability:
 class Agent:
     """独立意志智能体：需求驱动决策，非脚本绑定。"""
 
-    NEEDS_KEYS = ["physiological", "safety", "belonging", "esteem", "self_actualization"]
+    NEEDS_KEYS = [
+        "physiological",
+        "safety",
+        "belonging",
+        "esteem",
+        "self_actualization",
+    ]
 
-    def __init__(self, soul_hash: str, personality: Optional[Dict] = None,
-                 memory_vault: Optional[MemoryVault] = None):
+    def __init__(
+        self,
+        soul_hash: str,
+        personality: Optional[Dict] = None,
+        memory_vault: Optional[MemoryVault] = None,
+    ):
         self.soul_hash = soul_hash
         self.personality = personality or {"openness": 0.5, "conscientiousness": 0.5}
         # 马斯洛需求层次：初始中等水平，随行动演化
         self.needs = {
-            "physiological": 0.5, "safety": 0.5, "belonging": 0.3,
-            "esteem": 0.2, "self_actualization": 0.1,
+            "physiological": 0.5,
+            "safety": 0.5,
+            "belonging": 0.3,
+            "esteem": 0.2,
+            "self_actualization": 0.1,
         }
         self.long_term_memory: List[Dict] = []
         self.relationships: Dict[str, float] = {}
@@ -129,7 +152,8 @@ class Agent:
 
     def decide_next_action(self, world_state: Optional[Dict] = None) -> str:
         """内在需求驱动决策：优先满足最匮乏需求，不依赖主线任务。"""
-        assert not self._is_scripted(), "Agent is being scripted!"
+        if self._is_scripted():
+            raise RuntimeError("Agent is being scripted!")
         action = self._internal_decision_engine(world_state or {})
         self._update_needs(action)
         self.action_history.append(action)

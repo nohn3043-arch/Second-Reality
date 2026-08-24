@@ -27,6 +27,22 @@ from .keys import load_or_create_key, generate_key
 # WebSocket 握手魔术串（RFC 6455）
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
+# 无需鉴权的公开路由
+_PUBLIC_ROUTES = {
+    ("GET", "/health"),
+    ("POST", "/auth/issue"),
+    ("GET", "/protocol/schemas"),
+    ("POST", "/protocol/validate"),
+}
+
+
+def _safe_float(value, default: float = 0.0) -> Optional[float]:
+    """安全转 float，失败返回 None（供调用方区分 0 和非法值）。"""
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
 
 def _ws_accept(key: str) -> str:
     """计算 Sec-WebSocket-Accept 响应值。"""
@@ -80,8 +96,12 @@ class SoulAuth:
     - 可过期：expires_at 校验，过期 token 拒绝
     """
 
-    def __init__(self, key: Optional[bytes] = None,
-                 key_path: Optional[str] = None, token_ttl: int = 3600):
+    def __init__(
+        self,
+        key: Optional[bytes] = None,
+        key_path: Optional[str] = None,
+        token_ttl: int = 3600,
+    ):
         if key is None and key_path:
             key = load_or_create_key(key_path)
         if key is None:
@@ -97,8 +117,9 @@ class SoulAuth:
         sig = hmac.new(self._key, payload, hashlib.sha256).digest()
         return f"{_b64url(payload)}.{_b64url(sig)}"
 
-    def verify(self, token: Optional[str],
-               soul_ledger: Optional[Any] = None) -> Optional[str]:
+    def verify(
+        self, token: Optional[str], soul_ledger: Optional[Any] = None
+    ) -> Optional[str]:
         """
         校验 token，返回 soul_hash；无效/过期/灵魂不存在返回 None。
         若传入 soul_ledger，额外校验 soul_hash 是否已注册到全球身份账本。
@@ -133,13 +154,23 @@ class WorldAPI:
         self.auth = SoulAuth(key_path=key_path)
 
     # ---- 路由分发 ----
-    def dispatch(self, method: str, path: str, body: Dict, token: Optional[str]) -> tuple:
+    def dispatch(
+        self, method: str, path: str, body: Dict, token: Optional[str]
+    ) -> tuple:
         """返回 (status, payload_dict)。"""
         soul = self.auth.verify(token, self.world.soul_ledger)
 
         # 无需鉴权：健康检查
         if path == "/health":
             return 200, {"status": "ok", "world_id": self.world.world_id}
+
+        # ---- 鉴权门：非公开路由必须携带有效 token ----
+        if (
+            soul is None
+            and (method, path) not in _PUBLIC_ROUTES
+            and not path.startswith("/ws/")
+        ):
+            return 401, {"error": "authentication required"}
 
         # ---- 世界生命周期 ----
         if method == "GET" and path == "/world":
@@ -166,15 +197,18 @@ class WorldAPI:
             return 201, {"soul_hash": soul_hash, "needs": agent.needs}
 
         if method == "GET" and path.startswith("/agent/"):
-            soul_hash = path[len("/agent/"):]
+            soul_hash = path[len("/agent/") :]
             agent = self.world.npcs.get(soul_hash)
             if agent is None:
                 return 404, {"error": "agent not found"}
-            return 200, {"soul_hash": soul_hash, "needs": agent.needs,
-                         "actions": agent.action_history[-20:]}
+            return 200, {
+                "soul_hash": soul_hash,
+                "needs": agent.needs,
+                "actions": agent.action_history[-20:],
+            }
 
         if method == "GET" and path.startswith("/memory/"):
-            soul_hash = path[len("/memory/"):]
+            soul_hash = path[len("/memory/") :]
             if soul != soul_hash:
                 return 403, {"error": "仅本人可导出自身记忆"}
             mem = self.world.memory_integrity.export_memory(soul_hash)
@@ -184,14 +218,31 @@ class WorldAPI:
         if method == "GET" and path == "/economy/por":
             return 200, {"reserves": self.world.economy.proof_of_reserve_report()}
         if method == "POST" and path == "/economy/issue":
+            amount = _safe_float(body.get("amount", 0))
+            if amount is None:
+                return 400, {"error": "amount must be a number"}
             ok = self.world.economy.issue_pegged(
-                body.get("asset_id", ""), float(body.get("amount", 0)),
+                body.get("asset_id", ""),
+                amount,
                 body.get("owner_soul", ""),
             )
             return (200 if ok else 400), {"issued": ok}
+        if method == "POST" and path == "/economy/deposit":
+            amount = _safe_float(body.get("amount", 0))
+            if amount is None:
+                return 400, {"error": "amount must be a number"}
+            ok = self.world.economy.deposit_reserve(
+                body.get("asset_id", ""),
+                amount,
+            )
+            return (200 if ok else 400), {"deposited": ok}
         if method == "POST" and path == "/economy/redeem":
+            amount = _safe_float(body.get("amount", 0))
+            if amount is None:
+                return 400, {"error": "amount must be a number"}
             ok = self.world.economy.redeem(
-                body.get("asset_id", ""), float(body.get("amount", 0)),
+                body.get("asset_id", ""),
+                amount,
                 body.get("soul_hash", ""),
             )
             return (200 if ok else 400), {"redeemed": ok}
@@ -208,9 +259,11 @@ class WorldAPI:
         # ---- 互认协议 ----
         if method == "GET" and path == "/protocol/schemas":
             from .protocol import SCHEMAS
+
             return 200, SCHEMAS
         if method == "POST" and path == "/protocol/validate":
             from .protocol import ProtocolValidator
+
             ok, failures = ProtocolValidator().validate(body.get("world_config", {}))
             return (200 if ok else 422), {"passed": ok, "failures": failures}
 
@@ -248,15 +301,21 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length)) if length else {}
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, ValueError, TypeError):
             body = {}
         token = self.headers.get("Authorization")
-        status, payload = self.api.dispatch(self.command, self.path, body, token)
+        try:
+            status, payload = self.api.dispatch(self.command, self.path, body, token)
+        except (ValueError, TypeError) as e:
+            status, payload = 400, {"error": f"invalid input: {e}"}
         self._respond(status, payload)
 
     def do_GET(self):
         # WebSocket 升级：/ws/world 实时世界流
-        if self.path == "/ws/world" and self.headers.get("Upgrade", "").lower() == "websocket":
+        if (
+            self.path == "/ws/world"
+            and self.headers.get("Upgrade", "").lower() == "websocket"
+        ):
             self._ws_stream()
             return
         self._route()
@@ -266,13 +325,13 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _ws_stream(self) -> None:
         """WebSocket 握手 + 周期性推送世界状态（每 0.5s 一帧，共 5 帧后关闭）。"""
-        key = self.headers.get("Sec-WebSocket-Key", "")
-        self.send_response(101, "Switching Protocols")
-        self.send_header("Upgrade", "websocket")
-        self.send_header("Connection", "Upgrade")
-        self.send_header("Sec-WebSocket-Accept", _ws_accept(key))
-        self.end_headers()
         try:
+            key = self.headers.get("Sec-WebSocket-Key", "")
+            self.send_response(101, "Switching Protocols")
+            self.send_header("Upgrade", "websocket")
+            self.send_header("Connection", "Upgrade")
+            self.send_header("Sec-WebSocket-Accept", _ws_accept(key))
+            self.end_headers()
             for _ in range(5):
                 snapshot = self.api.stream_snapshot()
                 snapshot["event"] = "world_state"
@@ -281,17 +340,22 @@ class _Handler(BaseHTTPRequestHandler):
                 time.sleep(0.5)
             self.wfile.write(_ws_close_frame())
             self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
-            pass  # 客户端断开，静默结束
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # 客户端断开或握手失败，静默结束
 
     def log_message(self, *args):
         pass  # 静默访问日志（企业服务避免噪声）
 
 
 def serve(world: World, host: str = "127.0.0.1", port: int = 8000):
-    """启动 REST 服务（阻塞）。"""
-    _Handler.api = WorldAPI(world)
-    server = ThreadingHTTPServer((host, port), _Handler)
+    """启动 REST 服务（阻塞）。每次调用创建独立 Handler 类，支持多世界并行。"""
+    api = WorldAPI(world)
+
+    class _WorldHandler(_Handler):
+        pass
+
+    _WorldHandler.api = api
+    server = ThreadingHTTPServer((host, port), _WorldHandler)
     print(f"[system/api] serving world '{world.world_id}' at http://{host}:{port}")
     server.serve_forever()
 

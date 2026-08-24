@@ -27,7 +27,9 @@ CONSENSUS_THRESHOLD = 2.0 / 3.0
 class ConsensusNetwork:
     """共识网络：节点注册 + 提案 + 公投计票（≥2/3），持久化可审计。"""
 
-    def __init__(self, storage: Optional[Storage] = None, data_dir: Optional[str] = None):
+    def __init__(
+        self, storage: Optional[Storage] = None, data_dir: Optional[str] = None
+    ):
         self._storage = storage or Storage(data_dir=data_dir)
         self._storage.execute(
             "CREATE TABLE IF NOT EXISTS nodes ("
@@ -83,7 +85,13 @@ class ConsensusNetwork:
         self._storage.execute(
             "INSERT INTO proposals (proposal_id, action, proposer, created_at, status) "
             "VALUES (?, ?, ?, ?, ?)",
-            (proposal_id, json.dumps(action, ensure_ascii=False), proposer, time.time(), "open"),
+            (
+                proposal_id,
+                json.dumps(action, ensure_ascii=False),
+                proposer,
+                time.time(),
+                "open",
+            ),
         )
         return proposal_id
 
@@ -138,13 +146,18 @@ class ConsensusNetwork:
         rows = self._storage.query(
             "SELECT action, actor, verdict, ts FROM governance_log ORDER BY seq"
         )
-        return [{"action": json.loads(r[0]), "actor": r[1], "verdict": r[2], "ts": r[3]} for r in rows]
+        return [
+            {"action": json.loads(r[0]), "actor": r[1], "verdict": r[2], "ts": r[3]}
+            for r in rows
+        ]
 
 
 class Governance:
     """宪法第十条：反中心化控制。组合 ConsensusNetwork，提供真实公投治理。"""
 
-    def __init__(self, network: Optional[ConsensusNetwork] = None, data_dir: Optional[str] = None):
+    def __init__(
+        self, network: Optional[ConsensusNetwork] = None, data_dir: Optional[str] = None
+    ):
         self.network = network or ConsensusNetwork(data_dir=data_dir)
         self.governance_log: List[Dict] = []
         self.single_entity_actions: List[Dict] = []
@@ -158,42 +171,73 @@ class Governance:
         """单方面关停世界？永远不合法。"""
         return False  # 硬编码禁止
 
-    # ---- 真实公投治理 ----
-    def validate_governance_action(self, action: Dict, actor: str) -> bool:
+    # ---- 真实公投治理（两阶段：提案 → 投票 → 终议）----
+    def propose_governance_action(self, action: Dict, actor: str) -> Optional[str]:
         """
-        验证一项治理行为是否合法：
-        1. 是否为单一实体发起？（单节点不足以构成共识 -> 拒绝）
-        2. 是否经过 ≥2/3 全球公投？（否则拒绝）
-        3. 记录进公开治理日志。
+        Phase 1: 提出治理提案。
+        - 单实体发起 → 拒绝，返回 None
+        - 合法发起 → 创建提案，返回 proposal_id
+        调用方应收集节点投票后调用 finalize_governance_action(proposal_id)。
         """
         if self._is_single_entity(actor):
-            self.single_entity_actions.append({
-                "action": action, "actor": actor,
-                "verdict": "REJECTED - single entity control prohibited",
-            })
+            self.single_entity_actions.append(
+                {
+                    "action": action,
+                    "actor": actor,
+                    "verdict": "REJECTED - single entity control prohibited",
+                }
+            )
             self._log(action, actor, "rejected_single_entity")
-            return False
+            return None
         proposal_id = self.network.create_proposal(action, actor)
-        # 提案需公投通过；当前为同步校验：若已有 ≥2/3 赞成票则通过
-        passed = self.network.has_consensus(proposal_id)
-        if not passed:
-            self._log(action, actor, "rejected_no_consensus")
-            return False
-        self._log(action, actor, "passed")
-        return True
+        self._log(action, actor, f"proposed:{proposal_id}")
+        return proposal_id
 
-    def amend_base_rule(self, rule_id: str, new_value: Any, actor: str) -> bool:
-        """修改底层规则：必须有公投共识，绝不可单方面修改。"""
-        return self.validate_governance_action(
+    def finalize_governance_action(self, proposal_id: Optional[str]) -> bool:
+        """
+        Phase 2: 检查提案是否达成 ≥2/3 全球公投共识。
+        需在节点投票完成后调用。
+        """
+        if not proposal_id:
+            return False
+        passed = self.network.has_consensus(proposal_id)
+        self.network.close_proposal(proposal_id)
+        self._log({}, proposal_id, "passed" if passed else "rejected_no_consensus")
+        return passed
+
+    def validate_governance_action(
+        self, action: Dict, actor: str, proposal_id: Optional[str] = None
+    ) -> Any:
+        """
+        兼容入口：两阶段合一。
+        - proposal_id=None → 走 Phase 1（创建提案），返回 proposal_id 或 None
+        - proposal_id 非空 → 走 Phase 2（检查共识），返回 True/False
+        """
+        if proposal_id is None:
+            return self.propose_governance_action(action, actor)
+        return self.finalize_governance_action(proposal_id)
+
+    def amend_base_rule(
+        self, rule_id: str, new_value: Any, actor: str
+    ) -> Optional[str]:
+        """修改底层规则：提出治理提案，返回 proposal_id。需公投通过后调用 finalize。"""
+        return self.propose_governance_action(
             {"rule_id": rule_id, "new_value": new_value}, actor
         )
 
     def _is_single_entity(self, actor: str) -> bool:
-        """单一实体判定：未注册为共识节点、或节点数不足 3 时视为单点。"""
-        return self.network.node_count() < 3
+        """单一实体判定：节点数不足 3、或 actor 未注册为共识节点时视为单点。"""
+        if self.network.node_count() < 3:
+            return True
+        return actor not in self.network.nodes
 
     def _log(self, action: Dict, actor: str, verdict: str) -> None:
-        record = {"action": action, "actor": actor, "verdict": verdict, "ts": time.time()}
+        record = {
+            "action": action,
+            "actor": actor,
+            "verdict": verdict,
+            "ts": time.time(),
+        }
         self.governance_log.append(record)
         self.network.log_governance(action, actor, verdict)
 

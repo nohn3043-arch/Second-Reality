@@ -38,6 +38,7 @@ def _sha256_hex(payload: str) -> str:
 # SQLite 持久化后端（ACID，进程重启不丢失）
 # ============================================================
 
+
 class Storage:
     """统一存储后端：一张连接管理全部账本表，线程安全。"""
 
@@ -121,10 +122,13 @@ class Storage:
 # 第六条：灵魂账本（law/Identity attestation standard）
 # ============================================================
 
+
 class SoulLedger:
     """灵魂账本：SHA-256 soul_hash 全局唯一，持久化，不可撤销。"""
 
-    def __init__(self, storage: Optional[Storage] = None, data_dir: Optional[str] = None):
+    def __init__(
+        self, storage: Optional[Storage] = None, data_dir: Optional[str] = None
+    ):
         self._storage = storage or Storage(data_dir=data_dir)
         self.souls: Dict[str, Dict] = {}
         self._load()
@@ -153,13 +157,13 @@ class SoulLedger:
             return None  # 不可重复注册
         identity = {
             "soul_hash": soul_hash,
-            "soul_hash_sha256": True,          # law 身份确权：SHA-256 / 64 hex
-            "non_revocable": True,             # 宪法第六条：任何平台无权撤销
-            "cross_world_portable": True,      # 跨世界唯一、可迁移
-            "asset_bound": True,               # 资产绑定 soul_hash
+            "soul_hash_sha256": True,  # law 身份确权：SHA-256 / 64 hex
+            "non_revocable": True,  # 宪法第六条：任何平台无权撤销
+            "cross_world_portable": True,  # 跨世界唯一、可迁移
+            "asset_bound": True,  # 资产绑定 soul_hash
             "genesis_proof": genesis_proof,
             "created_at": time.time(),
-            "world_history": [],               # 跨世界迁移记录
+            "world_history": [],  # 跨世界迁移记录
         }
         self.souls[soul_hash] = identity
         self._flush(soul_hash, identity)
@@ -185,10 +189,13 @@ class SoulLedger:
 # 第八条：世界历史账本（宪法 WorldPerpetuity / HistoryLedger）
 # ============================================================
 
+
 class HistoryLedger:
     """世界历史账本：哈希链仅追加，篡改可检测（宪法第八条）。"""
 
-    def __init__(self, storage: Optional[Storage] = None, data_dir: Optional[str] = None):
+    def __init__(
+        self, storage: Optional[Storage] = None, data_dir: Optional[str] = None
+    ):
         self._storage = storage or Storage(data_dir=data_dir)
         self.chain: List[tuple] = []  # [(timestamp, event_data, block_hash), ...]
         self._load()
@@ -210,7 +217,12 @@ class HistoryLedger:
         )
         self._storage.execute(
             "INSERT INTO history (timestamp, event, block_hash, prev_hash) VALUES (?, ?, ?, ?)",
-            (ts, json.dumps(event, ensure_ascii=False, sort_keys=True), block_hash, prev_hash),
+            (
+                ts,
+                json.dumps(event, ensure_ascii=False, sort_keys=True),
+                block_hash,
+                prev_hash,
+            ),
         )
         self.chain.append((ts, event, block_hash))
         return block_hash
@@ -234,6 +246,7 @@ class HistoryLedger:
 # ============================================================
 # law 全球经济统一标准 V2.1：PoR 储备账本
 # ============================================================
+
 
 class EconomicReserve:
     """PoR 储备账本：锚定类资产按发行储备 1:1 映射；储备率 < 100% 即暂停兑换；
@@ -284,8 +297,17 @@ class EconomicReserve:
             self.oracle_sources.append(source_id)
             self._save_oracles()
 
-    def issue_pegged(self, asset_id: str, amount: float, owner_soul: str) -> bool:
-        """发行锚定资产：按发行储备 1:1 映射（real_peg_1to1）。"""
+    def issue_pegged(
+        self,
+        asset_id: str,
+        amount: float,
+        owner_soul: str,
+        initial_reserve: Optional[float] = None,
+    ) -> bool:
+        """
+        发行锚定资产。initial_reserve 提供时按 1:1 存入储备（real_peg_1to1）；
+        省略时储备为 0，调用方须随后 deposit_reserve 补足方可赎回。
+        """
         if amount <= 0 or asset_id in self._ledger:
             return False
         self._ledger[asset_id] = {
@@ -295,6 +317,8 @@ class EconomicReserve:
         }
         self._sync_asset(asset_id)
         self._log(asset_id, "issue", amount, owner_soul)
+        if initial_reserve is not None and initial_reserve > 0:
+            self.deposit_reserve(asset_id, initial_reserve)
         return True
 
     def deposit_reserve(self, asset_id: str, amount: float) -> bool:
@@ -367,10 +391,18 @@ class EconomicReserve:
             "INSERT OR REPLACE INTO reserve "
             "(asset_id, owner_soul, total_supply, reserve_amount, updated_at) "
             "VALUES (?, ?, ?, ?, ?)",
-            (asset_id, a["owner_soul"], a["total_supply"], a["reserve_amount"], time.time()),
+            (
+                asset_id,
+                a["owner_soul"],
+                a["total_supply"],
+                a["reserve_amount"],
+                time.time(),
+            ),
         )
 
-    def _log(self, asset_id: str, action: str, amount: float, soul_hash: Optional[str]) -> None:
+    def _log(
+        self, asset_id: str, action: str, amount: float, soul_hash: Optional[str]
+    ) -> None:
         self._storage.execute(
             "INSERT INTO reserve_ledger (asset_id, action, amount, soul_hash, ts) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -382,10 +414,13 @@ class EconomicReserve:
 # 第八条：世界快照注册表
 # ============================================================
 
+
 class SnapshotRegistry:
     """世界快照注册表：落盘，防止单点故障导致历史缺失（宪法第八条）。"""
 
-    def __init__(self, storage: Optional[Storage] = None, data_dir: Optional[str] = None):
+    def __init__(
+        self, storage: Optional[Storage] = None, data_dir: Optional[str] = None
+    ):
         self._storage = storage or Storage(data_dir=data_dir)
 
     def create_snapshot(self, world_state: Dict) -> str:
@@ -403,4 +438,10 @@ class SnapshotRegistry:
         return json.loads(rows[0][0]) if rows else {}
 
 
-__all__ = ["Storage", "SoulLedger", "HistoryLedger", "EconomicReserve", "SnapshotRegistry"]
+__all__ = [
+    "Storage",
+    "SoulLedger",
+    "HistoryLedger",
+    "EconomicReserve",
+    "SnapshotRegistry",
+]
