@@ -242,8 +242,17 @@ class Governance:
         )
 
     def _is_single_entity(self, actor: str) -> bool:
-        """单一实体判定：节点数不足 3、或 actor 未注册为共识节点时视为单点。"""
+        """单一实体判定：节点数不足 3、或 actor 未注册为共识节点时视为单点。
+
+        创世引导例外：节点数 < 3 时，允许创世者（第一个注册节点）
+        直接执行治理操作（如添加初始节点），不经过公投。
+        非创世者在引导期仍被拒绝。
+        """
         if self.network.node_count() < 3:
+            # 创世引导期：只有第一个注册节点（创世者）可操作
+            nodes = list(self.network.nodes.keys())
+            if nodes and actor == nodes[0]:
+                return False  # 创世者豁免
             return True
         return actor not in self.network.nodes
 

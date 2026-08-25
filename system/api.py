@@ -289,11 +289,15 @@ class WorldAPI:
                 return 403, {"error": "仅可为自己发行锚定资产"}
             if amount is None:
                 return 400, {"error": "amount must be a number"}
+            # initial_reserve 可选：省略时先发行后补足（law §2.3），提供时 1:1 足额
+            initial_reserve = body.get("initial_reserve")
+            if initial_reserve is not None:
+                initial_reserve = _safe_float(initial_reserve)
             ok = self.world.economy.issue_pegged(
                 body.get("asset_id", ""),
                 amount,
                 owner_soul,
-                initial_reserve=amount,  # 发行即 1:1 足额储备（law 1.1.A）
+                initial_reserve=initial_reserve,
             )
             return (200 if ok else 400), {"issued": ok}
         if method == "POST" and path == "/economy/deposit":

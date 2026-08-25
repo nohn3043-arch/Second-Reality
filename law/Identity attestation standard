@@ -12,7 +12,8 @@
 - 凭证 = 私钥（Ed25519），仅驻留持有者单台设备安全区（Secure Enclave / TEE），授权用生物识别（指纹/面容）批准在设备内签名。
 - 登录 = 挑战-响应：服务端下发一次性 nonce → 设备签名 → 服务端仅验签 → 签发会话 token；nonce 用后即焚，防重放。
 - 服务端不存储、不接触任何私钥材料；实现中出现「明文凭证传输 / 云端同步私钥 / 平台托管私钥」一律判定为违宪（零明文凭证铁律）。
-- 私钥丢失 = 身份冻结：不可恢复，原 soul_hash 永不可再注册，关联记忆永久封存、任何人不可读（密钥永失条款）。
+- 私钥丢失 = 身份冻结：原 soul_hash 永不可再注册，关联记忆永久封存、任何人不可读（密钥永失条款）。
+- 身份不可撤销 ≠ 凭证不可恢复：soul_hash（身份根）永久锁定（宪法第六条），但设备凭证（Passkey/私钥）可经社交恢复机制安全更换（见系统第4层恢复层：守护者投票 + 时间锁 + 主私钥 Shamir 分片托管）。恢复的是凭证，不是原私钥；soul_hash 不变，身份连续性不中断。
 
 ## 2. 资产标识 Schema (Asset Identifier Schema)
 - `soul_hash`：SHA-256 / 64 hex，绑定 GlobalIdentity（宪法第六条）。
@@ -36,6 +37,7 @@
 - Authentication: challenge-response — server issues one-time nonce, device signs, server verifies signature only; nonce burnt after use.
 - Server never stores or touches any private-key material; plaintext credential transport / cloud-synced private keys / hosted keys are unconstitutional.
 - Key loss = identity freeze: unrecoverable, original soul_hash never re-registrable, associated memory permanently sealed (key-loss clause).
+- Identity irrevocable ≠ credential unrecoverable: soul_hash (identity root) is permanently locked (Constitution Art. 6), but device credentials (Passkey/private key) can be securely replaced via social recovery (system Layer 4: guardian voting + timelock + Shamir secret sharing). Recovery replaces credentials, not the original private key; soul_hash remains unchanged, identity continuity preserved.
 ## 2. Asset Identifier Schema
 - `soul_hash`, `ASSET_ID = ASSET-<chain>-<sha256(creator|timestamp|seq)>`, `nft_dna` on-chain fingerprint.
 ## 3. Memory & Identity Continuity
