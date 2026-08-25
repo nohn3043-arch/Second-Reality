@@ -91,32 +91,23 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
-class SoulAuth:
-    """
-    鉴权中间件：基于 soul_hash 的 HMAC 无状态签名 token。
-    token 格式：base64url(payload).base64url(signature)
-    payload = "soul_hash.expires_at"
-    signature = HMAC-SHA256(secret_key, payload)
+class ChallengeManager:
+    """挑战-响应登录管理器：一次性 nonce 签发 + 签名校验。
 
-    特性：
-    - 无状态：服务重启后 token 仍有效（密钥持久化，不随进程消失）
-    - 不可伪造：签名由服务端独有密钥产生，篡改 payload 即失效
-    - 可过期：expires_at 校验，过期 token 拒绝
+    负责登录阶段 nonce 的生命周期管理（签发/速率限制/用后即焚）。
+    会话 token 由第 2 层 SessionManager 统一管理，此处不涉及。
     """
 
     def __init__(
         self,
         key: Optional[bytes] = None,
         key_path: Optional[str] = None,
-        token_ttl: int = 3600,
     ):
         if key is None and key_path:
             key = load_or_create_key(key_path)
         if key is None:
-            # 未提供密钥时降级为进程内随机密钥（测试/开发场景）
             key = generate_key()
         self._key = key
-        self.token_ttl = token_ttl
         # 挑战-响应登录：一次性的 nonce（绑灵魂，防重放，5 分钟过期）
         self.challenges: Dict[str, Dict] = {}
         self.challenge_ttl = 300
@@ -166,48 +157,15 @@ class SoulAuth:
             return False
         return verify_signature(pubkey, nonce.encode("utf-8"), signature)
 
-    def issue(self, soul_hash: str, ttl: Optional[int] = None) -> str:
-        """签发 token：绑定 soul_hash，携带过期时间。"""
-        expires_at = int(time.time()) + (ttl if ttl is not None else self.token_ttl)
-        payload = f"{soul_hash}.{expires_at}".encode("utf-8")
-        sig = hmac.new(self._key, payload, hashlib.sha256).digest()
-        return f"{_b64url(payload)}.{_b64url(sig)}"
-
-    def verify(
-        self, token: Optional[str], soul_ledger: Optional[Any] = None
-    ) -> Optional[str]:
-        """
-        校验 token，返回 soul_hash；无效/过期/灵魂不存在返回 None。
-        若传入 soul_ledger，额外校验 soul_hash 是否已注册到全球身份账本。
-        """
-        if not token:
-            return None
-        if token.startswith("Bearer "):
-            token = token[7:]
-        try:
-            enc_payload, enc_sig = token.rsplit(".", 1)
-            payload = _b64url_decode(enc_payload)
-            expected = hmac.new(self._key, payload, hashlib.sha256).digest()
-            if not hmac.compare_digest(_b64url_decode(enc_sig), expected):
-                return None
-            soul_hash, expires_at = payload.decode("utf-8").split(".", 1)
-            if int(expires_at) < int(time.time()):
-                return None
-            if soul_ledger is not None and not soul_ledger.exists(soul_hash):
-                return None  # 灵魂未注册，token 无效
-            return soul_hash
-        except (ValueError, UnicodeDecodeError):
-            return None
-
 
 class WorldAPI:
     """协议接口：把 World 的能力暴露为 REST 路由。"""
 
     def __init__(self, world: World):
         self.world = world
-        # 鉴权密钥持久化到世界数据目录，保证 token 跨服务重启仍可验证
-        key_path = os.path.join(world.storage.data_dir, "auth_key")
-        self.auth = SoulAuth(key_path=key_path)
+        # 挑战-响应 nonce 签名密钥（防篡改）
+        key_path = os.path.join(world.storage.data_dir, "challenge_key")
+        self.auth = ChallengeManager(key_path=key_path)
 
     # ---- 路由分发 ----
     def dispatch(
@@ -415,6 +373,36 @@ class WorldAPI:
                 for c in creds
             ]
             return 200, {"credentials": creds}
+
+        # ---- 授权管理（第3层：分级授权）----
+        if method == "GET" and path == "/auth/operations":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            ops = self.world.authorization.get_pending_operations(soul_hash=soul)
+            return 200, {"operations": ops}
+        if method == "POST" and path == "/auth/operations/approve":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            op_id = body.get("op_id", "")
+            ok = self.world.authorization.approve_operation(op_id, soul)
+            return (200 if ok else 400), {"approved": ok}
+        if method == "POST" and path == "/auth/operations/cancel":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            op_id = body.get("op_id", "")
+            ok = self.world.authorization.cancel_operation(op_id, soul)
+            return (200 if ok else 400), {"cancelled": ok}
+        if method == "POST" and path == "/auth/operations/process":
+            # 仅内部调用，处理到期操作
+            ops = self.world.authorization.process_execution_queue()
+            # 自动执行赎回操作
+            for op in ops:
+                if op["op_type"] == "redeem":
+                    asset_id = op["payload"].get("asset_id")
+                    amount = op["payload"].get("amount")
+                    if asset_id and amount:
+                        self.world.economy.redeem(asset_id, amount, op["soul_hash"])
+            return 200, {"executed": len(ops)}
 
         # ---- 恢复（第4层：社交恢复 + 时间锁）----
         if method == "POST" and path == "/recovery/guardian/add":

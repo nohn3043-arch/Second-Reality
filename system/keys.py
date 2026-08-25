@@ -245,6 +245,39 @@ class FileKmsProvider(KmsKeyProvider):
         return load_or_create_key(os.path.join(self.key_dir, key_id))
 
 
+class CloudKmsProvider(KmsKeyProvider):
+    """云 KMS 后端（生产用）：密钥由云 HSM 托管，本地进程不持久化明文密钥。
+
+    信封加密模型：
+      - KEK（主密钥）由云 KMS 托管，永不下发到本进程
+      - DEK（数据密钥）经 KMS 生成，加密密文落库，明文仅内存短存
+    用法（生产，client 为对应云厂商 SDK 的适配器）：
+      from my_kms_adapter import client   # 腾讯云 KMS / AWS KMS / 阿里云 KMS ...
+      kms = CloudKmsProvider(client)
+      key = kms.get_or_create_key("session_signing_key")
+    client 约定实现 get_or_create_key(key_id) -> bytes：
+      密钥不存在时生成并返回明文；存在时解密返回明文。
+
+    本地未注入云客户端（client=None）时自动降级文件后端（演示/测试），
+    构造时打印一次警告，便于发现漏配。
+    """
+
+    def __init__(self, client=None, key_dir: Optional[str] = None):
+        self._client = client
+        self._key_dir = key_dir or "."
+        if client is None:
+            print(
+                "[kms] CloudKmsProvider 未注入云客户端，降级为文件后端"
+                f"（{os.path.join(self._key_dir, '<key_id>')}）；生产环境请注入云 KMS client"
+            )
+
+    def get_or_create_key(self, key_id: str) -> bytes:
+        if self._client is None:
+            # 演示/测试降级：文件持久化（与 FileKmsProvider 等价，生产不可用）
+            return load_or_create_key(os.path.join(self._key_dir, key_id))
+        return self._client.get_or_create_key(key_id)
+
+
 __all__ = [
     "generate_key",
     "load_or_create_key",
@@ -259,4 +292,5 @@ __all__ = [
     "shamir_combine",
     "KmsKeyProvider",
     "FileKmsProvider",
+    "CloudKmsProvider",
 ]

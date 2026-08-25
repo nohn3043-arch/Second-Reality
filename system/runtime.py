@@ -14,6 +14,7 @@
 # ============================================================
 
 import json
+import os
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -43,13 +44,49 @@ from .ledger import (
     derive_soul_hash,
     is_hex64,
 )
-from .keys import verify_genesis_proof, FileKmsProvider
+from .keys import verify_genesis_proof, FileKmsProvider, CloudKmsProvider
 from .consensus import ConsensusNetwork, Governance
 from .agent_engine import MemoryVault, MemoryInalienability, Agent
 from .credentials import CredentialVault
-from .session import SessionManager
+from .session import (
+    SessionManager,
+    SqliteSessionStore,
+    MemorySessionStore,
+    RedisSessionStore,
+)
 from .authorization import AuthorizationEngine
 from .recovery import RecoveryManager
+
+
+# 存储后端白名单：同一份代码，三套后端。
+#   sqlite   默认：账本落盘 SQLite，会话同库
+#   memory   测试/无状态演示：账本进程内 :memory:，会话内存 dict
+#   redis    生产：账本本地 SQLite + 会话外置 Redis（需 redis-py，缺省降级）
+#   postgres 生产：账本预留 PG 驱动接口（当前降级 SQLite，分片路由已就绪）
+_STORAGE_BACKENDS = ("sqlite", "memory", "redis", "postgres")
+
+
+def _resolve_storage_backend() -> str:
+    """从环境变量 STORAGE 读取后端类型，非法值回落 sqlite。"""
+    backend = os.environ.get("STORAGE", "sqlite").strip().lower()
+    return backend if backend in _STORAGE_BACKENDS else "sqlite"
+
+
+def _build_redis_session_store():
+    """构造 Redis 会话存储；redis-py 缺失或连接失败时返回 None（调用方降级）。"""
+    try:
+        import redis
+    except ImportError:
+        print("[runtime] STORAGE=redis 但未安装 redis-py（pip install redis），会话降级 SQLite")
+        return None
+    try:
+        client = redis.Redis.from_url(
+            os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+        )
+    except Exception as e:  # pragma: no cover - 连接失败降级
+        print(f"[runtime] Redis 连接失败（{e}），会话降级 SQLite")
+        return None
+    return RedisSessionStore(client)
 
 
 class World:
@@ -62,23 +99,32 @@ class World:
         initial_oracles: Optional[List[str]] = None,
     ):
         self.world_id = world_id
-        self.storage = Storage(data_dir=data_dir)
+        # 存储后端：STORAGE 环境变量（sqlite/memory/redis/postgres），默认 sqlite
+        self.storage_backend = _resolve_storage_backend()
+        ledger_backend = (
+            self.storage_backend if self.storage_backend in ("sqlite", "memory") else "sqlite"
+        )
+        self.storage = Storage(data_dir=data_dir, backend=ledger_backend)
         # 并发保护：ThreadingHTTPServer 多线程下 tick/spawn 串行化，防状态竞态
         self._lock = threading.Lock()
 
-        # ---- 系统层真实组件（持久化）----
-        self.soul_ledger = SoulLedger(storage=self.storage)
-        self.history = HistoryLedger(storage=self.storage)
-        # 第4层恢复先装配，供授权层查询守护者列表
+        # ---- 账户系统六层架构（第1~4层服务组件）----
+        # 第1层：多设备凭证（服务端只存公钥）
+        self.credentials = CredentialVault(storage=self.storage)
+        # 第4层恢复，依赖凭证库查询绑定状态
         self.recovery = RecoveryManager(
             storage=self.storage,
             credential_vault=self.credentials,
         )
-        # 第3层授权装配，注入storage和recovery_manager
+        # 第3层授权，依赖恢复层查询守护者列表
         self.authorization = AuthorizationEngine(
             storage=self.storage,
             recovery_manager=self.recovery
         )
+
+        # ---- 系统层真实组件（持久化）----
+        self.soul_ledger = SoulLedger(storage=self.storage)
+        self.history = HistoryLedger(storage=self.storage)
         self.economy = EconomicReserve(
             storage=self.storage, authorization=self.authorization
         )
@@ -89,13 +135,24 @@ class World:
         self.consensus = ConsensusNetwork(storage=self.storage)
         self.governance = Governance(network=self.consensus)
         self.memory_integrity = MemoryInalienability(vault=self.memory_vault)
-
-        # ---- 账户系统六层架构（第1~4层服务组件）----
-        # 第1层：多设备凭证（服务端只存公钥）
-        self.credentials = CredentialVault(storage=self.storage)
         # 第2层：有状态会话（签名密钥经 KMS 抽象托管，可插拔 HSM）
-        self.kms = FileKmsProvider(self.storage.data_dir)
-        self.sessions = SessionManager(storage=self.storage, kms_provider=self.kms)
+        # 会话存储按 STORAGE 选择：memory -> 内存；redis -> Redis（缺省降级）；其余 -> SQLite
+        if self.storage_backend == "memory":
+            self.session_store = MemorySessionStore()
+        elif self.storage_backend == "redis":
+            self.session_store = _build_redis_session_store() or SqliteSessionStore(self.storage)
+        else:
+            self.session_store = SqliteSessionStore(self.storage)
+        # 密钥后端：redis/postgres 为生产形态，走云 KMS 抽象（未注入 client 时文件降级）
+        if self.storage_backend in ("redis", "postgres"):
+            self.kms = CloudKmsProvider(key_dir=self.storage.data_dir)
+        else:
+            self.kms = FileKmsProvider(self.storage.data_dir)
+        self.sessions = SessionManager(
+            storage=self.storage,
+            kms_provider=self.kms,
+            session_store=self.session_store,
+        )
 
         # ---- 宪法层合规外壳（构成公理 + 治理公理）----
         self.spatial_substrate = SpatialSubstrate()
@@ -269,6 +326,7 @@ class World:
 
     def close(self) -> None:
         """关闭世界，释放 SQLite 连接等底层资源。"""
+        self.session_store.close()
         self.storage.close()
 
 

@@ -2,6 +2,12 @@
 
 有状态会话：access token（短 TTL）+ refresh token（可轮换、可撤销）。
 替代原无状态 HMAC token，支持即时吊销（丢设备一键踢下线）。
+
+存储抽象（状态可外置）：SessionStore 接口。
+  - SqliteSessionStore  默认：与账本同库 sessions 表，进程重启不丢失
+  - MemorySessionStore  本地测试 / 无状态演示：进程内 dict，重启即失
+  - RedisSessionStore   生产：跨实例共享，支持 TTL 自动清理
+签名密钥经 KMS 抽象托管（可插拔 HSM）。
 """
 
 import base64
@@ -9,18 +15,181 @@ import hashlib
 import hmac
 import json
 import secrets
+import threading
 import time
 import uuid
+
+
+# ============================================================
+# SessionStore 接口：第 2 层会话状态可外置（内存/SQLite/Redis）
+# ============================================================
+
+
+class SessionStore:
+    """会话存储抽象：不绑定具体后端，供多数据中心部署切换。"""
+
+    def save(
+        self,
+        session_id: str,
+        soul_hash: str,
+        refresh_hash: str,
+        created_at: float,
+        expires_at: float,
+    ) -> None:
+        raise NotImplementedError
+
+    def get_by_refresh(self, refresh_hash: str):
+        """按 refresh 哈希取会话，返回 (session_id, soul_hash, expires_at, revoked) 或 None。"""
+        raise NotImplementedError
+
+    def revoke(self, soul_hash: str, session_id: str = None) -> None:
+        """吊销会话；session_id 为 None 时吊销该 soul 全部会话。"""
+        raise NotImplementedError
+
+    def close(self) -> None:
+        """释放底层资源（如有）。默认无操作。"""
+
+
+class SqliteSessionStore(SessionStore):
+    """SQLite 后端（默认）：与账本同库 sessions 表，进程重启不丢失。
+
+    复用 ledger.Storage 的连接与锁，不单独持有数据库资源。
+    """
+
+    def __init__(self, storage):
+        self._storage = storage
+
+    def save(self, session_id, soul_hash, refresh_hash, created_at, expires_at):
+        self._storage.execute(
+            "INSERT INTO sessions "
+            "(session_id, soul_hash, refresh_hash, created_at, expires_at, revoked) "
+            "VALUES (?, ?, ?, ?, ?, 0)",
+            (session_id, soul_hash, refresh_hash, created_at, expires_at),
+            shard_key=soul_hash,
+        )
+
+    def get_by_refresh(self, refresh_hash):
+        rows = self._storage.query(
+            "SELECT session_id, soul_hash, expires_at, revoked FROM sessions "
+            "WHERE refresh_hash=?",
+            (refresh_hash,),
+            shard_key=None,
+        )
+        return rows[0] if rows else None
+
+    def revoke(self, soul_hash, session_id=None):
+        if session_id:
+            self._storage.execute(
+                "UPDATE sessions SET revoked=1 WHERE soul_hash=? AND session_id=?",
+                (soul_hash, session_id),
+                shard_key=soul_hash,
+            )
+        else:
+            self._storage.execute(
+                "UPDATE sessions SET revoked=1 WHERE soul_hash=?",
+                (soul_hash,),
+                shard_key=soul_hash,
+            )
+
+
+class MemorySessionStore(SessionStore):
+    """内存后端（本地测试 / 无状态演示）：进程内 dict + 锁，重启即失。"""
+
+    def __init__(self):
+        self._sessions = {}  # refresh_hash -> (session_id, soul_hash, expires_at, revoked)
+        self._lock = threading.Lock()
+
+    def save(self, session_id, soul_hash, refresh_hash, created_at, expires_at):
+        with self._lock:
+            self._sessions[refresh_hash] = (session_id, soul_hash, expires_at, 0)
+
+    def get_by_refresh(self, refresh_hash):
+        with self._lock:
+            return self._sessions.get(refresh_hash)
+
+    def revoke(self, soul_hash, session_id=None):
+        with self._lock:
+            for rh, (sid, sh, exp, revoked) in list(self._sessions.items()):
+                if sh == soul_hash and (session_id is None or sid == session_id):
+                    self._sessions[rh] = (sid, sh, exp, 1)
+
+
+class RedisSessionStore(SessionStore):
+    """Redis 后端（生产，跨实例共享状态）。
+
+    需 redis-py：pip install redis。每个 refresh 哈希为键存 JSON 负载并设
+    TTL（过期自动清理）；另维护 soul -> {refresh_hash} 索引集合，吊销 O(会话数/soul)。
+    """
+
+    def __init__(self, client, key_prefix: str = "soul:session"):
+        if client is None:
+            raise ValueError("RedisSessionStore requires a redis client")
+        self._redis = client
+        self._prefix = key_prefix
+
+    def _key(self, refresh_hash: str) -> str:
+        return f"{self._prefix}:sess:{refresh_hash}"
+
+    def _soul_index(self, soul_hash: str) -> str:
+        return f"{self._prefix}:soul:{soul_hash}"
+
+    def save(self, session_id, soul_hash, refresh_hash, created_at, expires_at):
+        ttl = max(1, int(expires_at - created_at))
+        payload = json.dumps([session_id, soul_hash, expires_at, 0], ensure_ascii=False)
+        self._redis.setex(self._key(refresh_hash), ttl, payload)
+        self._redis.sadd(self._soul_index(soul_hash), refresh_hash)  # 吊销索引
+
+    def get_by_refresh(self, refresh_hash):
+        raw = self._redis.get(self._key(refresh_hash))
+        if not raw:
+            return None
+        session_id, soul_hash, expires_at, revoked = json.loads(raw)
+        return (session_id, soul_hash, expires_at, revoked)
+
+    def revoke(self, soul_hash, session_id=None):
+        for rh in self._redis.smembers(self._soul_index(soul_hash)) or set():
+            raw = self._redis.get(self._key(rh))
+            if not raw:
+                continue
+            data = json.loads(raw)
+            if session_id is None or data[0] == session_id:
+                data[3] = 1
+                self._redis.set(self._key(rh), json.dumps(data, ensure_ascii=False))
+
+
+# ============================================================
+# SessionManager：签发 / 验签 / 轮换 / 吊销
+# ============================================================
 
 
 class SessionManager:
     """有状态会话管理。签名密钥经 KMS 抽象托管（可插拔 HSM）。"""
 
-    def __init__(self, storage, kms_provider, access_ttl: int = 900, refresh_ttl: int = 604800):
-        self._storage = storage
+    def __init__(
+        self,
+        storage=None,
+        kms_provider=None,
+        session_store: SessionStore = None,
+        access_ttl: int = 900,
+        refresh_ttl: int = 604800,
+    ):
+        # 向后兼容：未显式传 session_store 时，包装传入的 storage 为 SQLite 后端
+        if session_store is None:
+            if storage is None:
+                raise ValueError("must provide either storage or session_store")
+            session_store = SqliteSessionStore(storage)
+        self._store = session_store
+        # 兼容属性：SQLite 后端下指向账本连接；其余后端为 None。
+        # 供既有审计/管理代码读取（新代码应使用公开方法 get_session_id）。
+        self._storage = getattr(session_store, "_storage", None)
         self._kms = kms_provider
         self.access_ttl = access_ttl
         self.refresh_ttl = refresh_ttl
+
+    def get_session_id(self, refresh_hash: str):
+        """按 refresh 哈希查 session_id（三种后端通吃，审计/管理接口用）。"""
+        entry = self._store.get_by_refresh(refresh_hash)
+        return entry[0] if entry else None
 
     def _signing_key(self) -> bytes:
         return self._kms.get_or_create_key("session_signing_key")
@@ -41,12 +210,7 @@ class SessionManager:
         refresh_token = secrets.token_urlsafe(32)
         session_id = uuid.uuid4().hex
         refresh_hash = hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()
-        self._storage.execute(
-            "INSERT INTO sessions "
-            "(session_id, soul_hash, refresh_hash, created_at, expires_at, revoked) "
-            "VALUES (?, ?, ?, ?, ?, 0)",
-            (session_id, soul_hash, refresh_hash, now, now + self.refresh_ttl),
-        )
+        self._store.save(session_id, soul_hash, refresh_hash, now, now + self.refresh_ttl)
         return access_token, refresh_token
 
     def verify(self, access_token: str):
@@ -75,31 +239,30 @@ class SessionManager:
     def refresh(self, refresh_token: str):
         """轮换 refresh token，返回新的 (access_token, refresh_token) 或 None。"""
         refresh_hash = hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()
-        rows = self._storage.query(
-            "SELECT session_id, soul_hash, expires_at, revoked FROM sessions "
-            "WHERE refresh_hash=?",
-            (refresh_hash,),
-        )
-        if not rows:
+        entry = self._store.get_by_refresh(refresh_hash)
+        if not entry:
             return None
-        session_id, soul_hash, expires_at, revoked = rows[0]
+        session_id, soul_hash, expires_at, revoked = entry
         if revoked or expires_at < time.time():
             return None
         # 轮换：吊销旧 session，签发新 session（防重放）
-        self._storage.execute(
-            "UPDATE sessions SET revoked=1 WHERE session_id=?", (session_id,)
-        )
+        self._store.revoke(soul_hash, session_id)
         return self.issue(soul_hash)
 
     def revoke(self, soul_hash: str, session_id: str = None) -> bool:
         """吊销会话。session_id 为 None 时吊销该 soul 全部会话。"""
-        if session_id:
-            self._storage.execute(
-                "UPDATE sessions SET revoked=1 WHERE soul_hash=? AND session_id=?",
-                (soul_hash, session_id),
-            )
-        else:
-            self._storage.execute(
-                "UPDATE sessions SET revoked=1 WHERE soul_hash=?", (soul_hash,)
-            )
+        self._store.revoke(soul_hash, session_id)
         return True
+
+    def close(self) -> None:
+        """释放会话存储底层资源（如有）。"""
+        self._store.close()
+
+
+__all__ = [
+    "SessionManager",
+    "SessionStore",
+    "SqliteSessionStore",
+    "MemorySessionStore",
+    "RedisSessionStore",
+]

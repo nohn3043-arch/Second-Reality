@@ -74,12 +74,43 @@ def default_world_data_dir(world_id: str) -> str:
 
 
 # ============================================================
-# SQLite 持久化后端（ACID，进程重启不丢失）
+# 分片路由抽象：soul_hash 数据归属哪个分片/后端
+# ============================================================
+
+
+class ShardRouter:
+    """分片路由抽象：决定 soul_hash 数据归属哪个存储单元。
+
+    本地默认单分片（SingleShardRouter）；生产按 soul_hash 前缀路由到
+    对应数据中心的存储单元。返回值是分片标识（如 "0" / "dc1-00"）。
+    分片实现负责建立该分片的连接/上下文，本接口是部署层的路由契约。
+    """
+
+    def shard_of(self, soul_hash: str) -> str:
+        raise NotImplementedError
+
+
+class SingleShardRouter(ShardRouter):
+    """单分片路由（本地/演示/单机部署）：所有 soul 归同一分片。"""
+
+    def shard_of(self, soul_hash: str) -> str:
+        return "0"
+
+
+# ============================================================
+# SQLite 持久化后端（ACID，进程重启不丢失；memory 后端进程内不落盘）
 # ============================================================
 
 
 class Storage:
-    """统一存储后端：一张连接管理全部账本表，线程安全。"""
+    """统一存储后端：一张连接管理全部账本表，线程安全。
+
+    backend: "sqlite"（默认，落盘到 data_dir/ledger.sqlite3）
+             "memory"（进程内 :memory:，不落盘，测试/无状态演示）
+    shard_router: 分片路由（默认 SingleShardRouter，单分片）。
+                  所有携带 soul 的读写都经 shard_key 标注归属分片，
+                  多分片部署时由 router 路由到对应后端。
+    """
 
     _SCHEMA = [
         """
@@ -204,8 +235,24 @@ class Storage:
         """,
     ]
 
-    def __init__(self, data_dir: Optional[str] = None):
+    def __init__(
+        self,
+        data_dir: Optional[str] = None,
+        backend: str = "sqlite",
+        shard_router: Optional[ShardRouter] = None,
+    ):
+        self.backend = backend if backend in ("sqlite", "memory") else "sqlite"
+        self.router = shard_router or SingleShardRouter()
+        # 密钥等数据目录照常保留（memory 仅账本连接不落盘）
         self.data_dir = data_dir or _DEFAULT_DATA_DIR
+        if self.backend == "memory":
+            # 内存后端：进程内 SQLite(:memory:)，重启即失，不触碰磁盘
+            self._conn = sqlite3.connect(":memory:", check_same_thread=False)
+            for ddl in self._SCHEMA:
+                self._conn.execute(ddl)
+            self._conn.commit()
+            self._lock = threading.Lock()
+            return
         os.makedirs(self.data_dir, exist_ok=True)
         db_path = os.path.join(self.data_dir, "ledger.sqlite3")
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -215,12 +262,21 @@ class Storage:
         self._conn.commit()
         self._lock = threading.Lock()
 
-    def execute(self, sql: str, params: tuple = ()) -> None:
+    def shard_of(self, soul_hash: str) -> str:
+        """返回 soul_hash 归属分片（部署层路由契约）。"""
+        return self.router.shard_of(soul_hash)
+
+    def execute(self, sql: str, params: tuple = (), shard_key: Optional[str] = None) -> None:
+        # 路由钩子：单分片后端为 no-op；多分片实现按 router.shard_of(shard_key) 选择连接
+        if shard_key is not None:
+            self.router.shard_of(shard_key)
         with self._lock:
             self._conn.execute(sql, params)
             self._conn.commit()
 
-    def query(self, sql: str, params: tuple = ()) -> List[tuple]:
+    def query(self, sql: str, params: tuple = (), shard_key: Optional[str] = None) -> List[tuple]:
+        if shard_key is not None:
+            self.router.shard_of(shard_key)
         with self._lock:
             return self._conn.execute(sql, params).fetchall()
 
@@ -273,6 +329,7 @@ class SoulLedger:
         self._storage.execute(
             "INSERT OR REPLACE INTO souls (soul_hash, identity, created_at) VALUES (?, ?, ?)",
             (soul_hash, json.dumps(identity, ensure_ascii=False), time.time()),
+            shard_key=soul_hash,  # 分片路由键：灵魂数据按 soul_hash 归属分片
         )
 
     def register_soul(self, genesis_proof: Dict) -> Optional[str]:
@@ -482,12 +539,11 @@ class EconomicReserve:
             or asset_id in self._ledger
         ):
             return False
-        # initial_reserve 省略时按 0 处理（docstring 语义）；提供时必须为正且 ≥ amount
-        if initial_reserve is not None and (
-            not is_finite_positive(initial_reserve) or initial_reserve < amount
-        ):
+        # initial_reserve 省略时按 law 「发行即 1:1 足额储备」默认等于发行量
+        if initial_reserve is None:
+            initial_reserve = amount
+        elif not is_finite_positive(initial_reserve) or initial_reserve < amount:
             return False
-        initial_reserve = initial_reserve or 0.0
         self._ledger[asset_id] = {
             "owner_soul": owner_soul,
             "total_supply": amount,
@@ -528,6 +584,7 @@ class EconomicReserve:
         if amount > asset["reserve_amount"]:
             return False  # 储备不足：暂停兑换（PoR 约束）
         # 第3层授权：大额赎回需延迟/多签，未完成前拒绝
+        self._last_decision = None
         if self.authorization is not None:
             decision = self.authorization.authorize(
                 soul_hash, 
@@ -536,7 +593,6 @@ class EconomicReserve:
                 payload={"asset_id": asset_id, "amount": amount}
             )
             if not decision["allowed"]:
-                # 记录操作ID到返回上下文（调用方可通过op_id查询/取消）
                 self._last_decision = decision
                 return False
         asset["total_supply"] -= amount
@@ -636,6 +692,8 @@ class SnapshotRegistry:
 
 __all__ = [
     "Storage",
+    "ShardRouter",
+    "SingleShardRouter",
     "SoulLedger",
     "HistoryLedger",
     "EconomicReserve",

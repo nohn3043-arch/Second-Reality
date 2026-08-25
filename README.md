@@ -76,18 +76,35 @@ run_headless(200, verbose=True)  # 无头仿真 200 tick；有图形环境可用
 | `runtime.py` | 无头运行时 | 世界创世装配、tick 主循环、因果链记录、快照持久化、19 项审计上报 | 复用 ledger 存储 |
 | `protocol.py` | 互认协议 | 四份法律标准机器可读化 JSON Schema、第三方实现并网校验 | - |
 | `api.py` | 服务接口 | REST 服务、有状态会话鉴权（可撤销）、账户系统路由、并发锁+速率限制 | 会话状态持久化 |
-| `keys.py` | 密钥管理 | Ed25519 密钥、Shamir 分片、KMS 抽象（可插拔 HSM）、签名密钥加载 | 密钥文件落盘 |
+| `keys.py` | 密钥管理 | Ed25519 密钥、Shamir 分片、KMS 抽象（文件/云 KMS 可插拔）、签名密钥加载 | 密钥文件落盘 / 云 KMS 托管 |
 | `identity_root.py` | 身份根（第0层） | 主身份密钥对 + Shamir(3,5) 分片托管，明文主私钥生成后立即清除 | - |
 | `credentials.py` | 凭证层（第1层） | 一个灵魂绑定多设备凭证（服务端只存公钥），绑定/吊销/验签 | SQLite |
-| `session.py` | 认证层（第2层） | 有状态会话：access token(15min) + refresh token(可轮换可撤销) | SQLite |
+| `session.py` | 认证层（第2层） | 有状态会话：access token(15min) + refresh token(可轮换可撤销)；会话存储可插拔（SQLite/Memory/Redis） | SessionStore 可插拔 |
 | `authorization.py` | 授权层（第3层） | 分级授权（小额即时/中额延迟/大额多签/超大额人工）+ 风险评分 | - |
 | `recovery.py` | 恢复层（第4层） | 社交恢复（3/5 守护者投票）+ 时间锁（7天可取消） | SQLite |
 
+**多后端部署（同一份代码，三套后端）：**
+运行前用环境变量 `STORAGE` 选择存储后端，默认 `sqlite`：
+
+| STORAGE | 账本（ledger） | 会话（session） | 适用 |
+|---|---|---|---|
+| `sqlite`（默认） | 落盘 SQLite（`.world_data/`） | 与账本同库 | 单机 / 演示 |
+| `memory` | 进程内 `:memory:`（不落盘） | 内存 dict | 测试 / 无状态演示 |
+| `redis` | 本地 SQLite | Redis（需 `pip install redis`，缺省降级 SQLite） | 生产横向扩展，多实例共享会话 |
+| `postgres` | 预留 PG 驱动（当前降级 SQLite） | SQLite | 生产大规模账本 |
+
+```
+STORAGE=redis REDIS_URL=redis://cache:6379/0 python -m system.api   # 生产示例
+```
+
+配套的部署级抽象：`ShardRouter`（按 `soul_hash` 分片路由，默认 `SingleShardRouter` 单分片）、`SessionStore`（会话状态可外置）、`CloudKmsProvider`（云 KMS 信封加密，未注入云客户端时自动降级文件后端）。多数据中心部署只需按 soul 分片把单元铺开，代码不变。
+
 **核心特性：**
-1. 零额外依赖：全部使用 Python 标准库实现，无需安装第三方包
+1. 零额外依赖：全部使用 Python 标准库实现，无需安装第三方包（`redis` 后端除外）
 2. 全链路可审计：所有操作均可追溯、可验证，完全符合第二视角审计引擎的 19 维合规要求
 3. 多实现互认：提供机器可读协议标准，支持第三方企业自研实现并网
 4. 生产级安全：账户系统六层架构（身份根/凭证/会话/授权/恢复/审计），Shamir 分片托管、KMS 密钥托管、有状态可撤销会话、社交恢复机制
+5. 可水平扩展：存储后端可插拔（SQLite/Memory/Redis/PG），分片路由接口就绪，状态可外置——多数据中心部署只是配置，不改代码
 
 演示运行时（`virtual_world.py`）以 `EconomySystem`、`TaskGenerator`、`NohnAgent` 装配以上各层，挂载在真实 `system.World` 上。
 
@@ -224,16 +241,16 @@ Second-Reality/
 ├── package.json                 # Node.js 依赖（文档生成工具）
 ├── system/                      # 真实实现层
 │   ├── __init__.py
-│   ├── ledger.py                #   持久化 Soul/History/Economic 账本 + 凭证/会话/恢复表（SQLite）
+│   ├── ledger.py                #   持久化账本（Soul/History/Economic/凭证/会话/恢复）+ ShardRouter 分片路由 + memory 后端
 │   ├── consensus.py             #   ≥2/3 公投共识 + 治理 + 创世引导期豁免
 │   ├── agent_engine.py          #   需求驱动智能体 + 记忆封印 + 状态持久化
-│   ├── runtime.py               #   创世装配 + 滴答循环 + 19 项审计报告 + 账户系统装配
+│   ├── runtime.py               #   创世装配 + 滴答循环 + 19 项审计报告 + 账户系统装配（STORAGE 后端选择）
 │   ├── api.py                   #   REST + 有状态会话鉴权 + 账户系统路由 + 速率限制
 │   ├── protocol.py              #   机器可读法律模式 + 校验器
-│   ├── keys.py                  #   签名密钥管理 + Shamir 分片 + KMS 抽象
+│   ├── keys.py                  #   签名密钥管理 + Shamir 分片 + KMS 抽象（文件 / CloudKmsProvider）
 │   ├── identity_root.py         #   身份根（第0层）：主密钥 + Shamir 分片托管
 │   ├── credentials.py           #   凭证层（第1层）：多设备凭证管理
-│   ├── session.py               #   认证层（第2层）：有状态可撤销会话
+│   ├── session.py               #   认证层（第2层）：有状态可撤销会话（SessionStore 可插拔）
 │   ├── authorization.py         #   授权层（第3层）：分级授权 + 风险引擎
 │   └── recovery.py              #   恢复层（第4层）：社交恢复 + 时间锁
 ├── law/                         # 通信 / 经济 / 身份 / 物理标准
