@@ -4,7 +4,7 @@
 ## 1. 公理级物理常数 (Axiomatic Constants)
 - `CONST_GRAVITY = 9.80665`（m/s²，标准重力加速度，精确值）
 - `CONST_TIME_RATE = 1.0`（统一时间流速，time_dilation 必须为 1.0）
-- `UNIT_SCALE = "METER"`（统一空间度量衡，公制）
+- `UNIT_SCALE = "metric"`（统一空间度量衡，公制，对齐 NOHN_LAW_AXIOMS 单一权威来源）
 - 要素反应表（Element Reactions）：
   - fire + water → evaporation（蒸发）
   - fire + electro → overload（超载）

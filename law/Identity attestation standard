@@ -2,10 +2,17 @@
 # law 层四大模块之一：定义数字生命的唯一身份、资产确权与跨世界可迁移性
 
 ## 1. 灵魂哈希规范 (Soul Hash)
-- 算法：SHA-256，输出 64 位十六进制字符串。
+- 算法：SHA-256，输出 64 个十六进制字符（256 bit）。
 - 生成：由 genesis 证明（sha256 签名合规 + 无冲突 + 不可重复注册）派生，一经生成永久锁定。
 - 不可撤销：任何平台无权单方面收回、重置或冻结（见宪法第六条 SoulAttestation.revoke_soul → 硬编码 False）。
 - 跨世界唯一：同一 soul_hash 在所有并网世界通用；世界必须接受外部 soul_hash，不得强制重新注册。
+
+## 1.1 公钥指纹与登录凭证 (Public-Key Fingerprint & Credential)
+- 身份派生（V2.2 定稿）：`soul_hash = SHA-256(公钥字节)`；公钥可公开围观，哈希只是 ID、不是秘密；盗窃哈希无法冒充，签名需要私钥。
+- 凭证 = 私钥（Ed25519），仅驻留持有者单台设备安全区（Secure Enclave / TEE），授权用生物识别（指纹/面容）批准在设备内签名。
+- 登录 = 挑战-响应：服务端下发一次性 nonce → 设备签名 → 服务端仅验签 → 签发会话 token；nonce 用后即焚，防重放。
+- 服务端不存储、不接触任何私钥材料；实现中出现「明文凭证传输 / 云端同步私钥 / 平台托管私钥」一律判定为违宪（零明文凭证铁律）。
+- 私钥丢失 = 身份冻结：不可恢复，原 soul_hash 永不可再注册，关联记忆永久封存、任何人不可读（密钥永失条款）。
 
 ## 2. 资产标识 Schema (Asset Identifier Schema)
 - `soul_hash`：SHA-256 / 64 hex，绑定 GlobalIdentity（宪法第六条）。
@@ -17,15 +24,22 @@
 - 记忆不可被平台单方面篡改或选择性删除；任何篡改须被检测并公示。
 
 ## 4. 合规判定（供审计员校验）
-- 世界必须同时满足：① 身份为 SHA-256 64位；② 平台无权撤销/重置；③ 支持跨世界迁移；④ 资产绑定 soul_hash。
-- 任一不满足 → 身份合规审计 FAILED，禁止接入 Nohn 生态。
+- 世界必须同时满足：① 身份为 SHA-256 64 个十六进制字符（256 bit）；② 平台无权撤销/重置；③ 支持跨世界迁移；④ 资产绑定 soul_hash；⑤ `soul_hash` 由公钥派生且服务端零明文凭证（密钥链路合规）。
+- 任一不满足 → 身份合规审计 FAILED，禁止接入 Nohn 生态。审计密钥链路时：账本全部灵魂公钥指纹一致 + identity 含私钥材料判 FAIL。
 
 ---
 ## 1. Soul Hash
 - SHA-256, 64 hex. Permanent, non-revocable, globally unique across worlds.
+## 1.1 Public-Key Fingerprint & Credential
+- Identity (V2.2): `soul_hash = SHA-256(pubkey bytes)`; the hash is a public ID, not a secret; stealing it proves nothing without the private key.
+- Credential: private key (Ed25519), resident only in the holder's single-device Secure Enclave/TEE; biometric approval signs inside the device.
+- Authentication: challenge-response — server issues one-time nonce, device signs, server verifies signature only; nonce burnt after use.
+- Server never stores or touches any private-key material; plaintext credential transport / cloud-synced private keys / hosted keys are unconstitutional.
+- Key loss = identity freeze: unrecoverable, original soul_hash never re-registrable, associated memory permanently sealed (key-loss clause).
 ## 2. Asset Identifier Schema
 - `soul_hash`, `ASSET_ID = ASSET-<chain>-<sha256(creator|timestamp|seq)>`, `nft_dna` on-chain fingerprint.
 ## 3. Memory & Identity Continuity
 - Memory owned by soul, exportable, portable, tamper-detectable.
 ## 4. Compliance
-- SHA-256 identity; non-revocable; cross-world portable; asset bound to soul_hash.
+- SHA-256 identity; non-revocable; cross-world portable; asset bound to soul_hash; (5) pubkey-derived soul_hash with zero plaintext credentials (key-chain compliance).
+- Any failure → identity audit FAILED, barred from Nohn ecosystem.

@@ -46,6 +46,11 @@
 - `ASSET_ID`：格式 `ASSET-<chain>-<sha256(creator|timestamp|seq)>`，全局唯一。
 - `nft_dna`：链上资产指纹（如 BTC 的 `txid:index`），不可伪造、可链上核验。
 
+## 7. 冻结资产处置 (Frozen Asset Liquidation)
+- 私钥永久丢失（密钥永失条款，见《身份确权规范》§1.1）导致身份冻结后：该灵魂全部锚定资产**永久锁存**，不销毁、不转移、不入公库。
+- 对应现实储备继续锁定，PoR 恒为 100%（不因冻结放行任何储备）。
+- 赎回通道对该灵魂永久关闭，亦不可对任何第三方开放；资产与储备一并封存直至世界终结。
+
 ---
 ## 1. Asset Attestation
 ### 1.1 Real-World Asset Onboarding
@@ -70,3 +75,7 @@
 - ≥3 independent oracles, median/weighted average, on-chain signed; anomaly triggers circuit breaker.
 ## 6. Asset Identifier Schema
 - `soul_hash`: SHA-256, 64 hex. `ASSET_ID`: `ASSET-<chain>-<sha256(...)>`. `nft_dna`: on-chain fingerprint.
+## 7. Frozen Asset Liquidation
+- On identity freeze from permanent key loss (Identity §1.1): all anchored assets of that soul are permanently locked — no destruction, no transfer, no reallocation to any public treasury.
+- Corresponding real reserves remain locked; PoR stays 100% (no reserve is ever released due to a freeze).
+- Redemption channels close permanently for that soul and must never be opened to any third party; assets and reserves are sealed until the end of the world.

@@ -40,7 +40,10 @@ from .ledger import (
     HistoryLedger,
     EconomicReserve,
     SnapshotRegistry,
+    derive_soul_hash,
+    is_hex64,
 )
+from .keys import verify_genesis_proof
 from .consensus import ConsensusNetwork, Governance
 from .agent_engine import MemoryVault, MemoryInalienability, Agent
 
@@ -159,30 +162,34 @@ class World:
 
     # ---- 世界演化 ----
     def spawn_agent(
-        self, soul_hash: str, personality: Optional[Dict] = None
+        self,
+        soul_hash: Optional[str] = None,
+        personality: Optional[Dict] = None,
+        genesis_proof: Optional[Dict] = None,
     ) -> Optional[Agent]:
-        """创生一个智能体：注册灵魂 + 记录存在 + 建立因果 + 绑定记忆。
-        已存在的灵魂返回已有 Agent，不覆盖需求状态和行动历史。"""
-        if len(soul_hash) != 64:
+        """创生智能体（定稿·密钥链路）：soul_hash 必须为 64 位 hex 且由公钥指纹派生。
+
+        创世证明必须先通过签名校验（verify_genesis_proof），任意伪造/篡改的
+        证明一律被拒——无论该 soul_hash 是否已存在（防伪造覆盖语义）。
+        已存在且证明有效的灵魂返回已有 Agent，不覆盖需求状态和行动历史。
+        """
+        if genesis_proof is None or not verify_genesis_proof(genesis_proof):
+            return None  # 无效签名 / 非公钥证明：拒绝凭空捏造或伪造身份
+        derived = derive_soul_hash(genesis_proof)
+        if soul_hash is None:
+            soul_hash = derived
+        if not is_hex64(soul_hash):
             return None
+        if derived is not None and derived != soul_hash:
+            return None  # 提供的 soul_hash 与公钥指纹不一致
         with self._lock:
             # 已存在则直接返回，不覆盖
             if soul_hash in self.npcs:
                 return self.npcs[soul_hash]
-            # 1. 灵魂确权（SHA-256 唯一，持久化到 SQLite）
+            # 1. 灵魂确权（SHA-256 公钥指纹，持久化到 SQLite）
             if not self.soul_ledger.exists(soul_hash):
-                identity = {
-                    "soul_hash": soul_hash,
-                    "soul_hash_sha256": True,
-                    "non_revocable": True,
-                    "cross_world_portable": True,
-                    "asset_bound": True,
-                    "genesis_proof": {"genesis_id": soul_hash},
-                    "created_at": time.time(),
-                    "world_history": [],
-                }
-                self.soul_ledger.souls[soul_hash] = identity
-                self.soul_ledger._flush(soul_hash, identity)
+                if self.soul_ledger.register_soul(genesis_proof) != soul_hash:
+                    return None
             # 2. 存在公理：创生（需因果 + 位置）
             self.existence_axiom.bring_into_existence(
                 soul_hash,

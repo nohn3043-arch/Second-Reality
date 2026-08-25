@@ -16,20 +16,26 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import struct
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional
 
 from .runtime import World
-from .keys import load_or_create_key, generate_key
+from .keys import load_or_create_key, generate_key, verify_signature
+from .ledger import is_hex64
 
 # WebSocket 握手魔术串（RFC 6455）
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 # 无需鉴权的公开路由
+# 注：spawn（创世注册）公开，因为它自带公钥签名证明——无效证明在
+# runtime 层被拒；有效证明即自证所有权，匿名注册新灵魂无安全危害。
 _PUBLIC_ROUTES = {
     ("GET", "/health"),
+    ("POST", "/agent/spawn"),
+    ("POST", "/auth/challenge"),
     ("POST", "/auth/issue"),
     ("GET", "/protocol/schemas"),
     ("POST", "/protocol/validate"),
@@ -109,6 +115,33 @@ class SoulAuth:
             key = generate_key()
         self._key = key
         self.token_ttl = token_ttl
+        # 挑战-响应登录：一次性的 nonce（绑灵魂，防重放，5 分钟过期）
+        self.challenges: Dict[str, Dict] = {}
+        self.challenge_ttl = 300
+
+    def issue_challenge(self, soul_hash: str) -> str:
+        """下发一次性 nonce（未绑定的旧 nonce 被覆盖，天然失效）。"""
+        nonce = secrets.token_hex(16)
+        self.challenges[soul_hash] = {
+            "nonce": nonce,
+            "expires": int(time.time()) + self.challenge_ttl,
+        }
+        return nonce
+
+    def verify_challenge(
+        self, soul_hash: str, nonce: str, signature_b64: str, pubkey: bytes
+    ) -> bool:
+        """校验挑战-响应签名：一次性、未过期、验签通过，三者缺一即拒。"""
+        entry = self.challenges.pop(soul_hash, None)  # 一次性：用后即焚
+        if not entry or entry["nonce"] != nonce:
+            return False
+        if entry["expires"] < int(time.time()):
+            return False
+        try:
+            signature = base64.b64decode(signature_b64)
+        except Exception:
+            return False
+        return verify_signature(pubkey, nonce.encode("utf-8"), signature)
 
     def issue(self, soul_hash: str, ttl: Optional[int] = None) -> str:
         """签发 token：绑定 soul_hash，携带过期时间。"""
@@ -190,11 +223,17 @@ class WorldAPI:
 
         # ---- Agent 操作 ----
         if method == "POST" and path == "/agent/spawn":
-            soul_hash = body.get("soul_hash", "")
-            agent = self.world.spawn_agent(soul_hash)
+            genesis_proof = body.get("genesis_proof")
+            agent = self.world.spawn_agent(
+                soul_hash=body.get("soul_hash"),
+                genesis_proof=genesis_proof,
+                personality=body.get("personality"),
+            )
             if agent is None:
-                return 400, {"error": "soul_hash 必须为 64 位 SHA-256 十六进制"}
-            return 201, {"soul_hash": soul_hash, "needs": agent.needs}
+                return 400, {
+                    "error": "创世证明须含有效公钥签名，且 soul_hash 必须等于公钥指纹"
+                }
+            return 201, {"soul_hash": agent.soul_hash, "needs": agent.needs}
 
         if method == "GET" and path.startswith("/agent/"):
             soul_hash = path[len("/agent/") :]
@@ -219,41 +258,63 @@ class WorldAPI:
             return 200, {"reserves": self.world.economy.proof_of_reserve_report()}
         if method == "POST" and path == "/economy/issue":
             amount = _safe_float(body.get("amount", 0))
+            owner_soul = body.get("owner_soul", "")
+            if owner_soul != soul:
+                return 403, {"error": "仅可为自己发行锚定资产"}
             if amount is None:
                 return 400, {"error": "amount must be a number"}
             ok = self.world.economy.issue_pegged(
                 body.get("asset_id", ""),
                 amount,
-                body.get("owner_soul", ""),
+                owner_soul,
+                initial_reserve=amount,  # 发行即 1:1 足额储备（law 1.1.A）
             )
             return (200 if ok else 400), {"issued": ok}
         if method == "POST" and path == "/economy/deposit":
             amount = _safe_float(body.get("amount", 0))
+            asset_id = body.get("asset_id", "")
+            if self.world.economy.owner_of(asset_id) != soul:
+                return 403, {"error": "仅资产所有者可补足储备"}
             if amount is None:
                 return 400, {"error": "amount must be a number"}
-            ok = self.world.economy.deposit_reserve(
-                body.get("asset_id", ""),
-                amount,
-            )
+            ok = self.world.economy.deposit_reserve(asset_id, amount)
             return (200 if ok else 400), {"deposited": ok}
         if method == "POST" and path == "/economy/redeem":
             amount = _safe_float(body.get("amount", 0))
+            soul_hash = body.get("soul_hash", "")
+            if soul_hash != soul:
+                return 403, {"error": "仅可赎回自己的资产"}
             if amount is None:
                 return 400, {"error": "amount must be a number"}
             ok = self.world.economy.redeem(
                 body.get("asset_id", ""),
                 amount,
-                body.get("soul_hash", ""),
+                soul,
             )
             return (200 if ok else 400), {"redeemed": ok}
 
-        # ---- 鉴权签发 ----
+        # ---- 鉴权签发（挑战-响应，凭私钥签 nonce，服务端仅验签）----
+        if method == "POST" and path == "/auth/challenge":
+            soul_hash = body.get("soul_hash", "")
+            if not is_hex64(soul_hash):
+                return 400, {"error": "soul_hash 必须为 64 位十六进制"}
+            if not self.world.soul_ledger.exists(soul_hash):
+                return 403, {
+                    "error": "soul_hash 未注册到灵魂账本，请先以创世证明创建智能体"
+                }
+            nonce = self.auth.issue_challenge(soul_hash)
+            return 200, {"soul_hash": soul_hash, "nonce": nonce, "ttl": 300}
         if method == "POST" and path == "/auth/issue":
             soul_hash = body.get("soul_hash", "")
-            if len(soul_hash) != 64:
-                return 400, {"error": "soul_hash 必须为 64 位"}
-            if not self.world.soul_ledger.exists(soul_hash):
-                return 403, {"error": "soul_hash 未注册到灵魂账本，请先创建智能体"}
+            nonce = body.get("nonce", "")
+            signature = body.get("signature", "")
+            if not is_hex64(soul_hash) or not nonce or not signature:
+                return 400, {"error": "soul_hash / nonce / signature 均必填"}
+            pubkey = self.world.soul_ledger.get_pubkey(soul_hash)
+            if pubkey is None:
+                return 403, {"error": "灵魂无注册公钥（旧版身份），拒绝签发"}
+            if not self.auth.verify_challenge(soul_hash, nonce, signature, pubkey):
+                return 403, {"error": "挑战签名校验失败：私钥不匹配或 nonce 已失效"}
             return 200, {"token": self.auth.issue(soul_hash)}
 
         # ---- 互认协议 ----

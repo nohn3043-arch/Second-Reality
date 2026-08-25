@@ -56,6 +56,9 @@ NOHN_LAW_AXIOMS = {
     "oracle_min_sources": 3,     # 波动资产预言机独立来源下限
 }
 
+# 治理公理十 / 第一条：全球公投通过阈值（≥2/3 超多数，单一权威来源）
+CONSENSUS_THRESHOLD = 2.0 / 3.0
+
 
 def _safe_get(obj, key, default=None):
     """从 dict 或 object 安全获取属性，统一 law 层审计与合规校验中的取值逻辑。"""
@@ -387,7 +390,7 @@ class ImmutableWorldRule:
         """建议修改规则？可以。但必须满足条件"""
         # 条件1：需要2/3以上"公民"同意
         approval_rate = self._global_referendum(proposed_change)
-        if approval_rate < 0.6667:
+        if approval_rate < CONSENSUS_THRESHOLD:
             self.rule_modification_log.append({
                 "proposal": proposed_change,
                 "status": "rejected",
@@ -588,7 +591,15 @@ class SoulAttestation:
         """
         注册一个新的数字生命
         条件：sha256 签名合规 + 无冲突 + 不可重复注册
+        优先委托注入的真实账本（system/ledger.py.SoulLedger，可持久化）；
+        未注入时降级为桩内存注册（不持久化）。
         """
+        if not isinstance(genesis_proof, dict) or not genesis_proof:
+            return False
+        real_register = getattr(self.soul_ledger, "register_soul", None)
+        if real_register is not None:
+            return real_register(genesis_proof) is not None
+        # 桩降级（无真实账本时）
         soul_hash = genesis_proof.get("soul_hash", "")
         if len(soul_hash) != 64:
             return False

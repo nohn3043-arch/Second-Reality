@@ -13,8 +13,10 @@
 # 的 _audit_economic_law / _audit_identity_law / _audit_world_perpetuity 消费。
 # ============================================================
 
+import base64
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import threading
@@ -23,6 +25,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from constitution_rules import NOHN_LAW_AXIOMS
+from .keys import derive_soul_hash_from_pubkey, verify_genesis_proof
 
 _DEFAULT_DATA_DIR = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, ".world_data")
@@ -32,6 +35,42 @@ _DEFAULT_DATA_DIR = os.path.abspath(
 def _sha256_hex(payload: str) -> str:
     """SHA-256 输出 64 位十六进制（对齐 NOHN_LAW_AXIOMS soul_hash_len=64）"""
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def derive_soul_hash(genesis_proof) -> Optional[str]:
+    """由创世证明派生灵魂哈希（单一权威身份规则）。
+
+    定稿规则：soul_hash = SHA-256(证明内公钥字节)。
+    证明必须形如 {"pubkey": b64(公钥), "declaration": {...}, "sig": b64(...)}；
+    不含公钥 / 公钥非法即返回 None。签名有效性由 register_soul 单独校验。
+    """
+    if not isinstance(genesis_proof, dict) or not genesis_proof:
+        return None
+    try:
+        pubkey = base64.b64decode(genesis_proof.get("pubkey", ""))
+    except Exception:
+        return None
+    if len(pubkey) != 32:  # Ed25519 公钥原始长度，与 keys 层强一致
+        return None
+    return derive_soul_hash_from_pubkey(pubkey)
+
+
+def is_hex64(value: Optional[str]) -> bool:
+    """判断一个值是否为合法的 64 位十六进制 soul_hash。"""
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    return all(c in "0123456789abcdef" for c in value.lower())
+
+
+def is_finite_positive(value: Any) -> bool:
+    """数值必须有限且大于 0。"""
+    return isinstance(value, (int, float)) and math.isfinite(value) and value > 0
+
+
+def default_world_data_dir(world_id: str) -> str:
+    """按 world_id 隔离默认持久化目录。"""
+    safe = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in world_id)
+    return os.path.join(_DEFAULT_DATA_DIR, safe or "default")
 
 
 # ============================================================
@@ -144,15 +183,18 @@ class SoulLedger:
         )
 
     def register_soul(self, genesis_proof: Dict) -> Optional[str]:
-        """注册新的数字生命。合规：sha256 签名 + 无冲突 + 不可重复注册。"""
-        if not isinstance(genesis_proof, dict) or not genesis_proof:
+        """注册新的数字生命（定稿·公钥指纹链路）。
+
+        合规三要件，缺一即拒：
+        1. 证明内公钥签名有效（私钥在设备端签名声明，服务端仅验签）；
+        2. soul_hash = SHA-256(公钥) 指纹，全局唯一；
+        3. 签名公钥指纹与账本中既有灵魂无冲突（不可重复注册）。
+        """
+        if not verify_genesis_proof(genesis_proof):
+            return None  # 签名无效 / 证明结构非法，拒绝凭空捏造灵魂
+        soul_hash = derive_soul_hash(genesis_proof)
+        if soul_hash is None:
             return None
-        payload = (
-            genesis_proof.get("signature")
-            or genesis_proof.get("genesis_id")
-            or json.dumps(genesis_proof, sort_keys=True)
-        )
-        soul_hash = _sha256_hex(str(payload))
         if soul_hash in self.souls:
             return None  # 不可重复注册
         identity = {
@@ -161,13 +203,26 @@ class SoulLedger:
             "non_revocable": True,  # 宪法第六条：任何平台无权撤销
             "cross_world_portable": True,  # 跨世界唯一、可迁移
             "asset_bound": True,  # 资产绑定 soul_hash
-            "genesis_proof": genesis_proof,
+            "public_key": genesis_proof.get("pubkey", ""),  # 公钥（b64），私钥永不上行
+            "key_fingerprint": soul_hash,  # 指纹复核锚点
+            "declaration": genesis_proof.get("declaration", {}),
+            "genesis_proof": genesis_proof,  # 含签名，供审计复核
             "created_at": time.time(),
             "world_history": [],  # 跨世界迁移记录
         }
         self.souls[soul_hash] = identity
         self._flush(soul_hash, identity)
         return soul_hash
+
+    def get_pubkey(self, soul_hash: str) -> Optional[bytes]:
+        """取回该灵魂的注册公钥（服务端登录验签用；私钥永不存储）。"""
+        ident = self.souls.get(soul_hash)
+        if not ident:
+            return None
+        try:
+            return base64.b64decode(ident.get("public_key", ""))
+        except Exception:
+            return None
 
     def exists(self, soul_hash: str) -> bool:
         return soul_hash in self.souls
@@ -210,20 +265,25 @@ class HistoryLedger:
         """追加世界事件，返回该事件区块哈希。链接前一区块，仅追加不改写。"""
         if not isinstance(event, dict):
             event = {"payload": event}
-        prev_hash = self.chain[-1][2] if self.chain else None
         ts = event.get("timestamp", time.time())
-        block_hash = _sha256_hex(
-            f"{ts}|{json.dumps(event, ensure_ascii=False, sort_keys=True)}|{prev_hash or ''}"
-        )
-        self._storage.execute(
-            "INSERT INTO history (timestamp, event, block_hash, prev_hash) VALUES (?, ?, ?, ?)",
-            (
-                ts,
-                json.dumps(event, ensure_ascii=False, sort_keys=True),
-                block_hash,
-                prev_hash,
-            ),
-        )
+        event_json = json.dumps(event, ensure_ascii=False, sort_keys=True)
+        with self._storage._lock:
+            try:
+                self._storage._conn.execute("BEGIN IMMEDIATE")
+                row = self._storage._conn.execute(
+                    "SELECT block_hash FROM history ORDER BY seq DESC LIMIT 1"
+                ).fetchone()
+                prev_hash = row[0] if row else None
+                block_hash = _sha256_hex(f"{ts}|{event_json}|{prev_hash or ''}")
+                self._storage._conn.execute(
+                    "INSERT INTO history (timestamp, event, block_hash, prev_hash) "
+                    "VALUES (?, ?, ?, ?)",
+                    (ts, event_json, block_hash, prev_hash),
+                )
+                self._storage._conn.commit()
+            except Exception:
+                self._storage._conn.rollback()
+                raise
         self.chain.append((ts, event, block_hash))
         return block_hash
 
@@ -291,6 +351,11 @@ class EconomicReserve:
                 "reserve_amount": row[3],
             }
 
+    def owner_of(self, asset_id: str) -> Optional[str]:
+        """查询某锚定资产的归属灵魂，供鉴权层绑定持证人身份。"""
+        asset = self._ledger.get(asset_id)
+        return asset["owner_soul"] if asset else None
+
     def register_oracle(self, source_id: str) -> None:
         """登记独立预言机来源（law：≥3 个，防单点操纵）。"""
         if source_id and source_id not in self.oracle_sources:
@@ -308,23 +373,29 @@ class EconomicReserve:
         发行锚定资产。initial_reserve 提供时按 1:1 存入储备（real_peg_1to1）；
         省略时储备为 0，调用方须随后 deposit_reserve 补足方可赎回。
         """
-        if amount <= 0 or asset_id in self._ledger:
+        if (
+            not isinstance(asset_id, str)
+            or not asset_id
+            or not is_hex64(owner_soul)
+            or not is_finite_positive(amount)
+            or not is_finite_positive(initial_reserve)
+            or initial_reserve < amount
+            or asset_id in self._ledger
+        ):
             return False
         self._ledger[asset_id] = {
             "owner_soul": owner_soul,
             "total_supply": amount,
-            "reserve_amount": 0.0,
+            "reserve_amount": initial_reserve,
         }
         self._sync_asset(asset_id)
         self._log(asset_id, "issue", amount, owner_soul)
-        if initial_reserve is not None and initial_reserve > 0:
-            self.deposit_reserve(asset_id, initial_reserve)
         return True
 
     def deposit_reserve(self, asset_id: str, amount: float) -> bool:
         """现实储备入账：锚定资产必须由等额储备背书。"""
         asset = self._ledger.get(asset_id)
-        if not asset or amount <= 0:
+        if not asset or not is_finite_positive(amount):
             return False
         asset["reserve_amount"] += amount
         self._sync_asset(asset_id)
@@ -347,7 +418,7 @@ class EconomicReserve:
         asset = self._ledger.get(asset_id)
         if not asset or asset["owner_soul"] != soul_hash:
             return False
-        if amount <= 0 or amount > asset["total_supply"]:
+        if not is_finite_positive(amount) or amount > asset["total_supply"]:
             return False
         if amount > asset["reserve_amount"]:
             return False  # 储备不足：暂停兑换（PoR 约束）
@@ -382,6 +453,8 @@ class EconomicReserve:
         ):
             return False
         if len(self.oracle_sources) < int(NOHN_LAW_AXIOMS["oracle_min_sources"]):
+            return False
+        if any(not self.reserve_ratio_ok(aid) for aid in self._ledger):
             return False
         return True
 
@@ -437,6 +510,12 @@ class SnapshotRegistry:
         )
         return json.loads(rows[0][0]) if rows else {}
 
+    def latest_snapshot(self) -> Dict:
+        rows = self._storage.query(
+            "SELECT state FROM snapshots ORDER BY created_at DESC LIMIT 1"
+        )
+        return json.loads(rows[0][0]) if rows else {}
+
 
 __all__ = [
     "Storage",
@@ -444,4 +523,8 @@ __all__ = [
     "HistoryLedger",
     "EconomicReserve",
     "SnapshotRegistry",
+    "derive_soul_hash",
+    "default_world_data_dir",
+    "is_finite_positive",
+    "is_hex64",
 ]

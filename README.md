@@ -43,10 +43,11 @@ python virtual_world.py
 编程方式启动：
 
 ```python
-from virtual_world import NohnWorld, NohnVisualApp
-nexus = NohnWorld()
-nexus.spawn("Explorer_01", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
-NohnVisualApp(nexus).root.mainloop()
+from virtual_world import NohnWorld, run_gui, run_headless
+
+nexus = NohnWorld()          # 内置初始资源与两个智能体
+nexus.spawn_agent()          # 可选：再追加一个智能体
+run_headless(200, verbose=True)  # 无头仿真 200 tick；有图形环境可用 run_gui()
 ```
 
 <p align="center">— ✦ —</p>
@@ -169,8 +170,14 @@ ok, failures = ProtocolValidator().validate(world_config)
 
 ```python
 from system.runtime import World
+from system.keys import generate_user_keypair, build_genesis_proof
+from system.ledger import derive_soul_hash
+
 world = World("my-world", data_dir="./my_data")
-world.spawn_agent("ab" * 32)
+device = generate_user_keypair()   # 私钥仅驻设备安全区（内存态），永不上传
+genesis_proof = build_genesis_proof(device["secret"], {"genesis_id": "my-first-soul"})
+soul_hash = derive_soul_hash(genesis_proof)   # = SHA-256(公钥)
+world.spawn_agent(soul_hash=soul_hash, genesis_proof=genesis_proof)
 world.tick()
 print(world.audit_summary())   # 18 维第二视角审计
 ```

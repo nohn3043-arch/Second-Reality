@@ -19,9 +19,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .ledger import Storage
-
-# 宪法第十条：全球公投通过阈值（≥2/3 超多数）
-CONSENSUS_THRESHOLD = 2.0 / 3.0
+from constitution_rules import CONSENSUS_THRESHOLD  # 宪法第十条：全球公投阈值（≥2/3，单一权威来源）
 
 
 class ConsensusNetwork:

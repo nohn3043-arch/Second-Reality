@@ -16,10 +16,12 @@
 import uuid
 import json
 import copy
+import base64
 from dataclasses import dataclass, asdict
 from typing import Dict, Any, List, Callable, Optional
 
 from constitution_rules import NOHN_LAW_AXIOMS, _safe_get
+from system.keys import derive_soul_hash_from_pubkey
 
 
 @dataclass
@@ -503,30 +505,44 @@ class SecondPerspectiveAuditor:
 
     def _audit_memory_integrity(self, world_instance) -> Dict:
         """审计第七条：记忆不可被单方面剥夺"""
-        result = {"memory_system": False, "exportable": False, "verdict": "PENDING"}
+        result = {"memory_system": False, "exportable": False,
+                  "tampering_free": False, "verdict": "PENDING"}
         mem = getattr(world_instance, "memory_integrity", None)
         if mem is not None:
             result["memory_system"] = True
             if hasattr(mem, "export_memory"):
                 result["exportable"] = True
-        if result["memory_system"] and result["exportable"]:
+            # 真实校验：全量灵魂记忆完整性无一篡改
+            vault = getattr(mem, "memory_vault", None)
+            ledger = getattr(world_instance, "soul_ledger", None)
+            souls = list(getattr(ledger, "souls", {}).keys()) if ledger else []
+            if vault is not None and hasattr(vault, "verify_all"):
+                result["tampering_free"] = all(vault.verify_all(s) for s in souls)
+            else:
+                result["tampering_free"] = True  # 无记忆库即无篡改
+        if result["memory_system"] and result["exportable"] and result["tampering_free"]:
             result["verdict"] = "PASS - 记忆归数字生命所有"
         elif result["verdict"] == "PENDING":
-            result["verdict"] = "FAILED - 记忆保护机制缺失"
+            result["verdict"] = "FAILED - 记忆被篡改或保护机制缺失"
         return result
 
     def _audit_world_perpetuity(self, world_instance) -> Dict:
         """审计第八条：世界永续、历史不可篡改、不可单方关停"""
-        result = {"perpetuity_system": False, "shutdown_illegal": False, "verdict": "PENDING"}
+        result = {"perpetuity_system": False, "shutdown_illegal": False,
+                  "history_integrity": False, "verdict": "PENDING"}
         wp = getattr(world_instance, "world_perpetuity", None)
         if wp is not None:
             result["perpetuity_system"] = True
             if hasattr(wp, "is_shutdown_legal") and wp.is_shutdown_legal("x", "operator") is False:
                 result["shutdown_illegal"] = True
-        if result["perpetuity_system"] and result["shutdown_illegal"]:
-            result["verdict"] = "PASS - 世界永续"
+        # 真实校验：历史哈希链完整性（防篡改）
+        history_chain = getattr(wp, "history_chain", None) or getattr(world_instance, "history", None)
+        if history_chain is not None and hasattr(history_chain, "validate_chain"):
+            result["history_integrity"] = history_chain.validate_chain()
+        if all([result["perpetuity_system"], result["shutdown_illegal"], result["history_integrity"]]):
+            result["verdict"] = "PASS - 世界永续，历史不可篡改"
         elif result["verdict"] == "PENDING":
-            result["verdict"] = "FAILED - 存在单方关停接口"
+            result["verdict"] = "FAILED - 历史链被篡改或存在单方关停接口"
         return result
 
     def _audit_interoperability(self, world_instance) -> Dict:
@@ -588,8 +604,14 @@ class SecondPerspectiveAuditor:
         if getattr(econ, "real_peg_1to1", False):
             result["real_1to1_pegged"] = True
 
-        if getattr(econ, "proof_of_reserve", False):
-            result["proof_of_reserve"] = True
+        # 真实校验：所有已发行锚定资产的储备率必须 ≥100%，否则即未足额 PoR
+        ledger = getattr(econ, "_ledger", {})
+        if hasattr(econ, "reserve_ratio_ok"):
+            result["proof_of_reserve"] = all(
+                econ.reserve_ratio_ok(aid) for aid in ledger
+            )
+        else:
+            result["proof_of_reserve"] = bool(getattr(econ, "proof_of_reserve", False))
 
         if getattr(econ, "redemption_right", False):
             result["redemption_right"] = True
@@ -613,12 +635,15 @@ class SecondPerspectiveAuditor:
         return result
 
     def _audit_identity_law(self, world_instance) -> Dict:
-        """审计 law 层《身份确权规范》V2.1：灵魂唯一、不可撤销、跨世界可迁移"""
+        """审计 law 层《身份确权规范》V2.1：灵魂唯一、不可撤销、跨世界可迁移、
+        公钥指纹（soul_hash = SHA-256(公钥)）且服务端零明文凭证。"""
         result = {
             "soul_hash_sha256": False,
             "non_revocable": False,
             "cross_world_portable": False,
             "asset_bound": False,
+            "pubkey_bound": False,
+            "no_plaintext_credential": False,
             "verdict": "PENDING"
         }
         ident = getattr(world_instance, "identity", None)
@@ -633,8 +658,42 @@ class SecondPerspectiveAuditor:
             result["cross_world_portable"] = True
         if _safe_get(ident, "asset_bound", False):
             result["asset_bound"] = True
-        if all(result[k] for k in ["soul_hash_sha256", "non_revocable", "cross_world_portable", "asset_bound"]):
-            result["verdict"] = "PASS - 符合身份确权标准"
+        # 真实校验：账本中每个 soul_hash 必须是合法 64 位 hex
+        ledger = getattr(world_instance, "soul_ledger", None)
+        souls = getattr(ledger, "souls", {}) if ledger else {}
+        valid_hashes = all(
+            isinstance(h, str) and len(h) == 64
+            and all(c in "0123456789abcdef" for c in h.lower())
+            for h in souls
+        )
+        result["soul_hash_sha256"] = bool(result["soul_hash_sha256"]) and valid_hashes
+        # 密钥链路 · 公钥绑定：每个灵魂的公钥可用，且 soul_hash == SHA-256(公钥)
+        pubkey_bound = True
+        for sh, identity_record in souls.items():
+            pk_b64 = identity_record.get("public_key", "")
+            if not pk_b64 or identity_record.get("key_fingerprint") != sh:
+                pubkey_bound = False
+                break
+            try:
+                if derive_soul_hash_from_pubkey(base64.b64decode(pk_b64)) != sh:
+                    pubkey_bound = False
+                    break
+            except Exception:
+                pubkey_bound = False
+                break
+        result["pubkey_bound"] = pubkey_bound  # 无灵魂（空账本）恒 True
+        # 密钥链路 · 服务端零明文凭证：账本 identity 中不得夹带任何私钥材料
+        _FORBIDDEN_KEYS = ("private_key", "private", "secret", "secret_key")
+        no_plain = all(
+            not any(k in identity_record for k in _FORBIDDEN_KEYS)
+            for identity_record in souls.values()
+        )
+        result["no_plaintext_credential"] = no_plain
+        if all(result[k] for k in [
+            "soul_hash_sha256", "non_revocable", "cross_world_portable",
+            "asset_bound", "pubkey_bound", "no_plaintext_credential",
+        ]):
+            result["verdict"] = "PASS - 符合身份确权标准（公钥指纹 + 零明文凭证）"
         elif result["verdict"] == "PENDING":
             result["verdict"] = "FAILED - 存在未满足的合规项"
         return result
