@@ -224,6 +224,27 @@ class SoulLedger:
         for row in self._storage.query("SELECT soul_hash, identity FROM souls"):
             self.souls[row[0]] = json.loads(row[1])
 
+    def _load_page(self, offset: int = 0, limit: int = 1000) -> int:
+        """分页加载灵魂（几十亿规模：避免全量内存爆炸）。返回本页条数。"""
+        rows = self._storage.query(
+            "SELECT soul_hash, identity FROM souls ORDER BY created_at LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+        for row in rows:
+            self.souls[row[0]] = json.loads(row[1])
+        return len(rows)
+
+    def _db_get(self, soul_hash: str) -> Optional[Dict]:
+        """缓存未命中时回查数据库（支持大规模场景）。"""
+        rows = self._storage.query(
+            "SELECT identity FROM souls WHERE soul_hash=?", (soul_hash,)
+        )
+        if rows:
+            ident = json.loads(rows[0][0])
+            self.souls[soul_hash] = ident  # 回填缓存
+            return ident
+        return None
+
     def _flush(self, soul_hash: str, identity: Dict) -> None:
         self._storage.execute(
             "INSERT OR REPLACE INTO souls (soul_hash, identity, created_at) VALUES (?, ?, ?)",
@@ -243,7 +264,7 @@ class SoulLedger:
         soul_hash = derive_soul_hash(genesis_proof)
         if soul_hash is None:
             return None
-        if soul_hash in self.souls:
+        if soul_hash in self.souls or self._db_get(soul_hash) is not None:
             return None  # 不可重复注册
         identity = {
             "soul_hash": soul_hash,
@@ -264,7 +285,7 @@ class SoulLedger:
 
     def get_pubkey(self, soul_hash: str) -> Optional[bytes]:
         """取回该灵魂的注册公钥（服务端登录验签用；私钥永不存储）。"""
-        ident = self.souls.get(soul_hash)
+        ident = self.souls.get(soul_hash) or self._db_get(soul_hash)
         if not ident:
             return None
         try:
@@ -273,14 +294,19 @@ class SoulLedger:
             return None
 
     def exists(self, soul_hash: str) -> bool:
-        return soul_hash in self.souls
+        if soul_hash in self.souls:
+            return True
+        return self._db_get(soul_hash) is not None
 
     def get_identity(self, soul_hash: str) -> Dict:
-        return self.souls.get(soul_hash, {})
+        ident = self.souls.get(soul_hash)
+        if ident is None:
+            ident = self._db_get(soul_hash)
+        return ident or {}
 
     def record_migration(self, soul_hash: str, to_world: str) -> bool:
         """跨世界迁移记录（law 身份确权：跨世界可迁移，不强制重新注册）。"""
-        ident = self.souls.get(soul_hash)
+        ident = self.souls.get(soul_hash) or self._db_get(soul_hash)
         if not ident:
             return False
         ident["world_history"].append({"to_world": to_world, "ts": time.time()})
@@ -365,8 +391,11 @@ class EconomicReserve:
         oracle_sources: Optional[List[str]] = None,
         storage: Optional[Storage] = None,
         data_dir: Optional[str] = None,
+        authorization=None,
     ):
         self._storage = storage or Storage(data_dir=data_dir)
+        # 第3层授权引擎（可选注入）：大额赎回需延迟/多签
+        self.authorization = authorization
         # 并网即查属性（对齐 EconomicBaseline.compliant 与审计引擎）
         self.real_peg_1to1 = True
         self.proof_of_reserve = True
@@ -426,11 +455,15 @@ class EconomicReserve:
             or not asset_id
             or not is_hex64(owner_soul)
             or not is_finite_positive(amount)
-            or not is_finite_positive(initial_reserve)
-            or initial_reserve < amount
             or asset_id in self._ledger
         ):
             return False
+        # initial_reserve 省略时按 0 处理（docstring 语义）；提供时必须为正且 ≥ amount
+        if initial_reserve is not None and (
+            not is_finite_positive(initial_reserve) or initial_reserve < amount
+        ):
+            return False
+        initial_reserve = initial_reserve or 0.0
         self._ledger[asset_id] = {
             "owner_soul": owner_soul,
             "total_supply": amount,
@@ -470,6 +503,11 @@ class EconomicReserve:
             return False
         if amount > asset["reserve_amount"]:
             return False  # 储备不足：暂停兑换（PoR 约束）
+        # 第3层授权：大额赎回需延迟/多签，未完成前拒绝
+        if self.authorization is not None:
+            decision = self.authorization.authorize(soul_hash, "redeem", amount)
+            if not decision["allowed"]:
+                return False
         asset["total_supply"] -= amount
         asset["reserve_amount"] -= amount
         self._sync_asset(asset_id)

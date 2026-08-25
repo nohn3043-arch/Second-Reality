@@ -4,7 +4,7 @@
 #   - 世界实例生命周期（创世 / tick / 快照）
 #   - Agent 操作（spawn / 决策 / 记忆导出）
 #   - 经济操作（PoR 查验 / 发行 / 赎回）
-#   - 审计查询（18 项报告拉取）
+#   - 审计查询（19 项报告拉取）
 #
 # 实现：纯标准库 http.server（无第三方依赖，可横向扩展部署）。
 #   鉴权：基于 soul_hash 的 Bearer Token 中间件（可插拔）。
@@ -18,7 +18,9 @@ import json
 import os
 import secrets
 import struct
+import threading
 import time
+from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional
 
@@ -118,21 +120,42 @@ class SoulAuth:
         # 挑战-响应登录：一次性的 nonce（绑灵魂，防重放，5 分钟过期）
         self.challenges: Dict[str, Dict] = {}
         self.challenge_ttl = 300
+        # 并发保护：ThreadingHTTPServer 多线程下 challenges 读写加锁
+        self._lock = threading.Lock()
+        # 速率限制：每 soul 60s 内最多 5 次登录尝试（防暴力破解）
+        self._rate_limit: Dict[str, list] = defaultdict(list)
+        self._rate_window = 60
+        self._rate_max = 5
+
+    def _check_rate(self, soul_hash: str) -> bool:
+        """检查速率限制。返回 True 表示允许，False 表示超限。"""
+        now = time.time()
+        attempts = self._rate_limit[soul_hash]
+        # 清理过期记录
+        self._rate_limit[soul_hash] = [t for t in attempts if now - t < self._rate_window]
+        if len(self._rate_limit[soul_hash]) >= self._rate_max:
+            return False
+        self._rate_limit[soul_hash].append(now)
+        return True
 
     def issue_challenge(self, soul_hash: str) -> str:
         """下发一次性 nonce（未绑定的旧 nonce 被覆盖，天然失效）。"""
+        if not self._check_rate(soul_hash):
+            return None  # 速率超限
         nonce = secrets.token_hex(16)
-        self.challenges[soul_hash] = {
-            "nonce": nonce,
-            "expires": int(time.time()) + self.challenge_ttl,
-        }
+        with self._lock:
+            self.challenges[soul_hash] = {
+                "nonce": nonce,
+                "expires": int(time.time()) + self.challenge_ttl,
+            }
         return nonce
 
     def verify_challenge(
         self, soul_hash: str, nonce: str, signature_b64: str, pubkey: bytes
     ) -> bool:
         """校验挑战-响应签名：一次性、未过期、验签通过，三者缺一即拒。"""
-        entry = self.challenges.pop(soul_hash, None)  # 一次性：用后即焚
+        with self._lock:
+            entry = self.challenges.pop(soul_hash, None)  # 一次性：用后即焚
         if not entry or entry["nonce"] != nonce:
             return False
         if entry["expires"] < int(time.time()):

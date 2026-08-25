@@ -10,7 +10,7 @@
 #   virtual_world.py       演示运行时客户端
 #
 # 约束：本包暴露的状态必须可被 audit_engine.SecondPerspectiveAuditor
-# 的 18 项审计检查；创世（GenesisCondition.initiate_genesis）所需的
+# 的 19 项审计检查；创世（GenesisCondition.initiate_genesis）所需的
 # 组件全部由本包真实创建并注入。
 #
 # 模块规划（桩转实渐进式落地）：

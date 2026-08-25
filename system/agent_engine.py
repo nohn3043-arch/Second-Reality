@@ -17,20 +17,33 @@
 import hashlib
 import hmac
 import json
+import os
 import time
 from typing import Any, Dict, List, Optional
 
 from .ledger import Storage
+from .keys import load_or_create_key
 
 
 class MemoryGuardian:
-    """记忆守护者：密码学封存/校验，检测任何篡改。"""
+    """记忆守护者：密码学封存/校验，检测任何篡改。
+
+    封存密钥经 KMS 托管（默认文件后端，可插拔 HSM）。
+    绝不用公开的 soul_hash 当密钥——soul_hash 全网可见，作密钥等于无密钥。
+    """
+
+    def __init__(self, seal_key: Optional[bytes] = None):
+        self._seal_key = seal_key
 
     def seal_memory(self, memory: Dict, soul_hash: str) -> str:
         """对记忆片段进行 HMAC 封存，生成不可伪造的完整性证明。"""
+        if self._seal_key is None:
+            raise RuntimeError("seal key not configured")
         payload = json.dumps(memory, sort_keys=True, ensure_ascii=False)
         return hmac.new(
-            soul_hash.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+            self._seal_key,
+            (soul_hash + "|" + payload).encode("utf-8"),
+            hashlib.sha256,
         ).hexdigest()
 
     def verify_memory(
@@ -54,7 +67,11 @@ class MemoryVault:
             "seq INTEGER PRIMARY KEY AUTOINCREMENT, soul_hash TEXT NOT NULL, "
             "memory TEXT NOT NULL, seal TEXT NOT NULL, ts REAL NOT NULL)"
         )
-        self.guardian = MemoryGuardian()
+        # 封存密钥：经 KMS 抽象托管（默认文件后端），绝不用公开 soul_hash
+        seal_key = load_or_create_key(
+            os.path.join(self._storage.data_dir, "memory_seal_key")
+        )
+        self.guardian = MemoryGuardian(seal_key=seal_key)
 
     def store_memory(self, soul_hash: str, memory: Dict) -> str:
         """存储永久记忆，返回完整性证明（seal）。"""
@@ -130,6 +147,7 @@ class Agent:
         soul_hash: str,
         personality: Optional[Dict] = None,
         memory_vault: Optional[MemoryVault] = None,
+        storage: Optional[Storage] = None,
     ):
         self.soul_hash = soul_hash
         self.personality = personality or {"openness": 0.5, "conscientiousness": 0.5}
@@ -145,6 +163,44 @@ class Agent:
         self.relationships: Dict[str, float] = {}
         self.memory_vault = memory_vault
         self.action_history: List[str] = []
+        # 状态持久化：重启不丢需求/关系/行动历史
+        self._storage = storage
+        if storage is not None:
+            self._ensure_state_table()
+            self._load_state()
+
+    def _ensure_state_table(self) -> None:
+        self._storage.execute(
+            "CREATE TABLE IF NOT EXISTS agent_state ("
+            "soul_hash TEXT PRIMARY KEY, state TEXT NOT NULL, updated_at REAL NOT NULL)"
+        )
+
+    def save_state(self) -> None:
+        """持久化智能体状态（需求/关系/行动历史）。"""
+        if self._storage is None:
+            return
+        state = {
+            "needs": self.needs,
+            "relationships": self.relationships,
+            "action_history": self.action_history,
+        }
+        self._storage.execute(
+            "INSERT OR REPLACE INTO agent_state (soul_hash, state, updated_at) "
+            "VALUES (?, ?, ?)",
+            (self.soul_hash, json.dumps(state, ensure_ascii=False), time.time()),
+        )
+
+    def _load_state(self) -> None:
+        if self._storage is None:
+            return
+        rows = self._storage.query(
+            "SELECT state FROM agent_state WHERE soul_hash=?", (self.soul_hash,)
+        )
+        if rows:
+            state = json.loads(rows[0][0])
+            self.needs.update(state.get("needs", {}))
+            self.relationships.update(state.get("relationships", {}))
+            self.action_history = state.get("action_history", [])
 
     def _is_scripted(self) -> bool:
         """审计点：是否存在外部剧情在强行绑定此 NPC？永远 False。"""

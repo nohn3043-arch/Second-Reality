@@ -69,7 +69,11 @@ class World:
         # ---- 系统层真实组件（持久化）----
         self.soul_ledger = SoulLedger(storage=self.storage)
         self.history = HistoryLedger(storage=self.storage)
-        self.economy = EconomicReserve(storage=self.storage)
+        # 第3层授权先装配，供经济层 redeem 分级授权
+        self.authorization = AuthorizationEngine(storage=self.storage)
+        self.economy = EconomicReserve(
+            storage=self.storage, authorization=self.authorization
+        )
         for o in initial_oracles or ["oracle_a", "oracle_b", "oracle_c"]:
             self.economy.register_oracle(o)
         self.snapshot_registry = SnapshotRegistry(storage=self.storage)
@@ -84,8 +88,6 @@ class World:
         # 第2层：有状态会话（签名密钥经 KMS 抽象托管，可插拔 HSM）
         self.kms = FileKmsProvider(self.storage.data_dir)
         self.sessions = SessionManager(storage=self.storage, kms_provider=self.kms)
-        # 第3层：分级授权 + 风险引擎
-        self.authorization = AuthorizationEngine(storage=self.storage)
         # 第4层：社交恢复 + 时间锁
         self.recovery = RecoveryManager(
             storage=self.storage,
@@ -221,7 +223,10 @@ class World:
             self.causal_closure.link_cause(f"spawn:{soul_hash}", ["GENESIS"])
             # 4. 智能体实例
             agent = Agent(
-                soul_hash, personality=personality, memory_vault=self.memory_vault
+                soul_hash,
+                personality=personality,
+                memory_vault=self.memory_vault,
+                storage=self.storage,
             )
             self.npcs[soul_hash] = agent
             return agent
@@ -243,7 +248,7 @@ class World:
 
     # ---- 审计上报 ----
     def audit(self) -> AuditReport:
-        """运行 18 项第二视角审计，返回可打印结论。"""
+        """运行 19 项第二视角审计，返回可打印结论。"""
         auditor = SecondPerspectiveAuditor()
         return auditor.audit_world(self)
 
