@@ -16,6 +16,7 @@
 import base64
 import hashlib
 import json
+import logging
 import math
 import os
 import sqlite3
@@ -26,6 +27,8 @@ from typing import Any, Dict, List, Optional
 
 from constitution_rules import NOHN_LAW_AXIOMS
 from .keys import derive_soul_hash_from_pubkey, verify_genesis_proof
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_DATA_DIR = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, ".world_data")
@@ -456,6 +459,7 @@ class SoulLedger:
         }
         self.souls[soul_hash] = identity
         self._flush(soul_hash, identity)
+        logger.info("soul registered soul_hash=%s count_recorded=%d", soul_hash, count + 1)
         return soul_hash
 
     def get_pubkey(self, soul_hash: str) -> Optional[bytes]:
@@ -534,6 +538,7 @@ class HistoryLedger:
                 self._storage._conn.rollback()
                 raise
         self.chain.append((ts, event, block_hash))
+        logger.info("history append block_hash=%s prev_hash=%s", block_hash, prev_hash)
         return block_hash
 
     def validate_chain(self) -> bool:
@@ -769,6 +774,7 @@ class SnapshotRegistry:
             "INSERT INTO snapshots (snapshot_id, state, created_at) VALUES (?, ?, ?)",
             (snapshot_id, json.dumps(world_state, ensure_ascii=False), time.time()),
         )
+        logger.info("snapshot created snapshot_id=%s", snapshot_id)
         return snapshot_id
 
     def restore_from_snapshot(self, snapshot_id: str) -> Dict:

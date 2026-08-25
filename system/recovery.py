@@ -5,8 +5,11 @@
 """
 
 import base64
+import logging
 import time
 import uuid
+
+logger = logging.getLogger(__name__)
 
 
 class RecoveryManager:
@@ -49,6 +52,8 @@ class RecoveryManager:
             "VALUES (?, ?, ?, ?, ?, 'pending')",
             (request_id, soul_hash, new_public_key_b64, now, now + self.timelock_seconds),
         )
+        logger.info("recovery initiated request_id=%s soul_hash=%s timelock=%ds",
+                     request_id, soul_hash, self.timelock_seconds)
         return request_id
 
     def approve_recovery(self, request_id: str, guardian_soul: str) -> bool:
@@ -67,6 +72,8 @@ class RecoveryManager:
             "VALUES (?, ?, ?)",
             (request_id, guardian_soul, time.time()),
         )
+        logger.info("recovery vote cast request_id=%s guardian_soul=%s votes=%d",
+                    request_id, guardian_soul, self.vote_count(request_id))
         return True
 
     def vote_count(self, request_id: str) -> int:

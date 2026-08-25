@@ -16,12 +16,15 @@
 import base64
 import hashlib
 import json
+import logging
 import time
 from typing import Any, Dict, List, Optional
 
 from .ledger import Storage
 from .keys import verify_signature
 from constitution_rules import CONSENSUS_THRESHOLD  # 宪法第十条：全球公投阈值（≥2/3，单一权威来源）
+
+logger = logging.getLogger(__name__)
 
 
 class ConsensusNetwork:
@@ -52,6 +55,7 @@ class ConsensusNetwork:
         )
         self.nodes: Dict[str, str] = {}
         self._load()
+        logger.info("consensus network ready nodes=%d", len(self.nodes))
 
     # ---- 节点注册 ----
     def _load(self) -> None:

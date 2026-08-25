@@ -15,6 +15,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import struct
@@ -27,6 +28,8 @@ from typing import Any, Dict, Optional
 from .runtime import World
 from .keys import load_or_create_key, generate_key, verify_signature
 from .ledger import is_hex64
+
+logger = logging.getLogger(__name__)
 
 # WebSocket 握手魔术串（RFC 6455）
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -220,6 +223,13 @@ class WorldAPI:
         )
         if soul is not None and not self.world.soul_ledger.exists(soul):
             soul = None
+        logger.info(
+            "request method=%s path=%s client_ip=%s soul=%s",
+            method,
+            path,
+            client_ip or "-",
+            soul if soul is not None else "-",
+        )
 
         # 无需鉴权：健康检查
         if path == "/health":
@@ -638,6 +648,10 @@ def serve(
     警告：仅本机或受控内网（host=127.0.0.1）默认安全；对外暴露必须走反向
     代理（nginx/Caddy）终结 TLS，或在此函数提供 tls_certfile/tls_keyfile。
     """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
     api = WorldAPI(world)
 
     class _WorldHandler(_Handler):
@@ -667,6 +681,7 @@ def serve(
                 flush=True,
             )
     print(f"[system/api] serving world '{world.world_id}' at {scheme}://{host}:{port}")
+    logger.info("serve start world_id=%s scheme=%s host=%s port=%d", world.world_id, scheme, host, port)
     server.serve_forever()
 
 

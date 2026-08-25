@@ -14,10 +14,13 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import threading
 import time
 import uuid
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -221,6 +224,13 @@ class SessionManager:
         session_id = uuid.uuid4().hex
         refresh_hash = hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()
         self._store.save(session_id, soul_hash, refresh_hash, now, now + self.refresh_ttl)
+        logger.info(
+            "session issued soul_hash=%s session_id=%s access_ttl=%ds pkfp_bound=%s",
+            soul_hash,
+            session_id,
+            self.access_ttl,
+            "yes" if pubkey_fingerprint else "no",
+        )
         return access_token, refresh_token
 
     def verify(self, access_token: str, credential_vault=None):

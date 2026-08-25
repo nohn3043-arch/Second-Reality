@@ -14,6 +14,7 @@
 # ============================================================
 
 import json
+import logging
 import os
 import threading
 import time
@@ -56,6 +57,8 @@ from .session import (
 )
 from .authorization import AuthorizationEngine
 from .recovery import RecoveryManager
+
+logger = logging.getLogger(__name__)
 
 
 # 存储后端白名单：同一份代码，三套后端。
@@ -152,6 +155,12 @@ class World:
             storage=self.storage,
             kms_provider=self.kms,
             session_store=self.session_store,
+        )
+        logger.info(
+            "world initialized world_id=%s storage_backend=%s session_store=%s",
+            self.world_id,
+            self.storage_backend,
+            type(self.session_store).__name__,
         )
 
         # ---- 宪法层合规外壳（构成公理 + 治理公理）----

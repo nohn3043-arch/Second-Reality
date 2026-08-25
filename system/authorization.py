@@ -9,10 +9,13 @@
 
 import time
 import json
+import logging
 import uuid
 from typing import Dict, List, Optional
 
 from .recovery import RecoveryManager
+
+logger = logging.getLogger(__name__)
 
 
 class AuthorizationEngine:
@@ -68,6 +71,14 @@ class AuthorizationEngine:
         """
         tier = self.classify(amount)
         required = self.required_approval_count(tier, soul_hash)
+        logger.info(
+            "authorize soul_hash=%s action=%s amount=%s tier=%s required_approve=%d",
+            soul_hash,
+            action,
+            amount,
+            tier,
+            required,
+        )
 
         if tier == "small":
             return {
@@ -150,6 +161,7 @@ class AuthorizationEngine:
             "UPDATE delay_operations SET approved=?, updated_at=? WHERE op_id=?",
             (approved, now, op_id)
         )
+        logger.info("operation approved op_id=%s guardian_soul=%s approved_count=%d", op_id, guardian_soul, approved)
         return True
 
     def cancel_operation(self, op_id: str, soul_hash: str) -> bool:
