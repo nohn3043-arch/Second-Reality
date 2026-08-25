@@ -321,7 +321,21 @@ class WorldAPI:
                 amount,
                 soul,
             )
-            return (200 if ok else 400), {"redeemed": ok}
+            if ok:
+                return 200, {"redeemed": True}
+            # 检查是否是授权延迟
+            decision = getattr(self.world.economy, "_last_decision", None)
+            if decision:
+                return 202, {
+                    "redeemed": False,
+                    "delayed": True,
+                    "op_id": decision["op_id"],
+                    "tier": decision["tier"],
+                    "execute_at": decision["execute_at"],
+                    "required_approve": decision["required_approve"],
+                    "message": decision["message"]
+                }
+            return 400, {"redeemed": False}
 
         # ---- 鉴权签发（挑战-响应，凭私钥签 nonce，服务端仅验签）----
         if method == "POST" and path == "/auth/challenge":
@@ -333,6 +347,8 @@ class WorldAPI:
                     "error": "soul_hash 未注册到灵魂账本，请先以创世证明创建智能体"
                 }
             nonce = self.auth.issue_challenge(soul_hash)
+            if nonce is None:
+                return 429, {"error": "too many login attempts, please try again later"}
             return 200, {"soul_hash": soul_hash, "nonce": nonce, "ttl": 300}
         if method == "POST" and path == "/auth/issue":
             soul_hash = body.get("soul_hash", "")

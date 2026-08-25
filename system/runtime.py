@@ -69,8 +69,16 @@ class World:
         # ---- 系统层真实组件（持久化）----
         self.soul_ledger = SoulLedger(storage=self.storage)
         self.history = HistoryLedger(storage=self.storage)
-        # 第3层授权先装配，供经济层 redeem 分级授权
-        self.authorization = AuthorizationEngine(storage=self.storage)
+        # 第4层恢复先装配，供授权层查询守护者列表
+        self.recovery = RecoveryManager(
+            storage=self.storage,
+            credential_vault=self.credentials,
+        )
+        # 第3层授权装配，注入storage和recovery_manager
+        self.authorization = AuthorizationEngine(
+            storage=self.storage,
+            recovery_manager=self.recovery
+        )
         self.economy = EconomicReserve(
             storage=self.storage, authorization=self.authorization
         )
@@ -88,13 +96,6 @@ class World:
         # 第2层：有状态会话（签名密钥经 KMS 抽象托管，可插拔 HSM）
         self.kms = FileKmsProvider(self.storage.data_dir)
         self.sessions = SessionManager(storage=self.storage, kms_provider=self.kms)
-        # 第4层：社交恢复 + 时间锁
-        self.recovery = RecoveryManager(
-            storage=self.storage,
-            credential_vault=self.credentials,
-            guardian_threshold=3,
-            timelock_seconds=7 * 24 * 3600,
-        )
 
         # ---- 宪法层合规外壳（构成公理 + 治理公理）----
         self.spatial_substrate = SpatialSubstrate()

@@ -143,6 +143,30 @@ class Storage:
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS delay_operations (
+            op_id       TEXT PRIMARY KEY,
+            op_type     TEXT NOT NULL,
+            soul_hash   TEXT NOT NULL,
+            payload     TEXT NOT NULL,
+            tier        TEXT NOT NULL,
+            status      TEXT NOT NULL DEFAULT 'pending',
+            required    INTEGER NOT NULL DEFAULT 0,
+            approved    INTEGER NOT NULL DEFAULT 0,
+            execute_at  REAL NOT NULL,
+            created_at  REAL NOT NULL,
+            updated_at  REAL NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS op_approvals (
+            op_id          TEXT NOT NULL,
+            guardian_soul  TEXT NOT NULL,
+            approved_at    REAL NOT NULL,
+            PRIMARY KEY (op_id, guardian_soul),
+            FOREIGN KEY (op_id) REFERENCES delay_operations(op_id) ON DELETE CASCADE
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS sessions (
             session_id   TEXT PRIMARY KEY,
             soul_hash    TEXT NOT NULL,
@@ -505,8 +529,15 @@ class EconomicReserve:
             return False  # 储备不足：暂停兑换（PoR 约束）
         # 第3层授权：大额赎回需延迟/多签，未完成前拒绝
         if self.authorization is not None:
-            decision = self.authorization.authorize(soul_hash, "redeem", amount)
+            decision = self.authorization.authorize(
+                soul_hash, 
+                "redeem", 
+                amount,
+                payload={"asset_id": asset_id, "amount": amount}
+            )
             if not decision["allowed"]:
+                # 记录操作ID到返回上下文（调用方可通过op_id查询/取消）
+                self._last_decision = decision
                 return False
         asset["total_supply"] -= amount
         asset["reserve_amount"] -= amount

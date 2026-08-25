@@ -50,7 +50,12 @@ class SessionManager:
         return access_token, refresh_token
 
     def verify(self, access_token: str):
-        """验 access token，返回 soul_hash 或 None。"""
+        """验 access token，返回 soul_hash 或 None。支持标准 Bearer 前缀。"""
+        if not access_token:
+            return None
+        # 剥离标准Bearer头
+        if access_token.startswith("Bearer "):
+            access_token = access_token[7:]
         try:
             payload_b64, sig_b64 = access_token.split(".")
             payload = base64.urlsafe_b64decode(payload_b64.encode("ascii"))

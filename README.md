@@ -59,9 +59,9 @@ run_headless(200, verbose=True)  # 无头仿真 200 tick；有图形环境可用
 整套栈分为四个可分离层次，使规则（只读）、审计官（中立裁判）、系统（实现）与演示客户端互不混淆：
 
 - **宪法规则**（`constitution_rules.py`）——原初公理与十条治理律法，永久锁定为根信任锚。`NOHN_LAW_AXIOMS` 是所有常量的唯一权威来源。
-- **审计引擎**（`audit_engine.py`）——第二视角认知审计官（`ResponsibilityAccount` + 可插拔 `AuditPlugin` + `SecondPerspectiveAuditor`，含 18 维合规审查）。它是裁判，不是世界的一部分。
-- **法律**（`law/`）——四个标准层：通信协议标准 · 全球经济统一标准（货币、锚定、储备证明、赎回）· 身份证明标准（灵魂哈希绑定身份）· 物理基线标准（重力 / 时间 / 尺度常数）。
-- **系统**（`system/`）——真实实现层：持久化账本、≥2/3 公投共识、智能体引擎、无头运行时、REST/WS API、机器可读协议模式、生产安全。所有暴露状态必须通过第二视角审计官的 18 项合规审查。
+- **审计引擎**（`audit_engine.py`）——第二视角认知审计官（`ResponsibilityAccount` + 可插拔 `AuditPlugin` + `SecondPerspectiveAuditor`，含 19 维合规审查，含鉴权安全维度）。它是裁判，不是世界的一部分。
+- **法律**（`law/`）——四个标准层：通信协议标准 · 全球经济统一标准（货币、锚定、储备证明、赎回）· 身份证明标准（灵魂哈希绑定身份，含 V2.2 凭证可恢复条款）· 物理基线标准（重力 / 时间 / 尺度常数）。
+- **系统**（`system/`）——真实实现层：持久化账本、≥2/3 公投共识、智能体引擎、无头运行时、REST/WS API、机器可读协议模式、账户系统六层架构（身份根/凭证/会话/授权/恢复/审计）。所有暴露状态必须通过第二视角审计官的 19 项合规审查。
 - **桥梁**（`compatibility_bridge.py`）——遗留世界加入 Nohn 领地的唯一「海关」：`translate_intent()` 语义清洗（去隐式解释权）、`check_physics_constants()` 物理常数校验、`verify_soul_hash()` 灵魂哈希身份核验。
 
 ### system 模块详细说明
@@ -70,19 +70,24 @@ run_headless(200, verbose=True)  # 无头仿真 200 tick；有图形环境可用
 | 模块 | 定位 | 核心能力 | 持久化 |
 |---|---|---|---|
 | `__init__.py` | 模块入口 | 定义 system 层整体边界、约束与模块规划 | - |
-| `ledger.py` | 状态账本 | 灵魂哈希确权、世界历史哈希链、储备证明账本、世界快照 | SQLite（默认 `.world_data/` 目录） |
-| `consensus.py` | 共识网络 | 节点注册、提案公投（≥2/3 超多数通过）、去中心化治理 | 复用 ledger 存储 |
-| `agent_engine.py` | 智能体引擎 | 需求驱动智能体决策、记忆封存/校验、记忆不可侵占保障 | 复用 ledger 存储 |
-| `runtime.py` | 无头运行时 | 世界创世装配、tick 主循环、因果链记录、快照持久化、审计上报 | 复用 ledger 存储 |
+| `ledger.py` | 状态账本 | 灵魂哈希确权（惰性加载+分页）、世界历史哈希链、储备证明账本、世界快照 | SQLite（默认 `.world_data/` 目录） |
+| `consensus.py` | 共识网络 | 节点注册（真实签名验签）、提案公投（≥2/3 超多数通过）、去中心化治理、创世引导期豁免 | 复用 ledger 存储 |
+| `agent_engine.py` | 智能体引擎 | 需求驱动智能体决策、记忆封存/校验（KMS 密钥）、记忆不可侵占保障、状态持久化 | 复用 ledger 存储 |
+| `runtime.py` | 无头运行时 | 世界创世装配、tick 主循环、因果链记录、快照持久化、19 项审计上报 | 复用 ledger 存储 |
 | `protocol.py` | 互认协议 | 四份法律标准机器可读化 JSON Schema、第三方实现并网校验 | - |
-| `api.py` | 服务接口 | REST/WebSocket 服务、HMAC 鉴权、全能力对外开放 | 无状态 |
-| `keys.py` | 密钥管理 | HMAC 签名密钥生成/持久化/加载、生产级安全保障 | 密钥文件落盘（权限 0600） |
+| `api.py` | 服务接口 | REST 服务、有状态会话鉴权（可撤销）、账户系统路由、并发锁+速率限制 | 会话状态持久化 |
+| `keys.py` | 密钥管理 | Ed25519 密钥、Shamir 分片、KMS 抽象（可插拔 HSM）、签名密钥加载 | 密钥文件落盘 |
+| `identity_root.py` | 身份根（第0层） | 主身份密钥对 + Shamir(3,5) 分片托管，明文主私钥生成后立即清除 | - |
+| `credentials.py` | 凭证层（第1层） | 一个灵魂绑定多设备凭证（服务端只存公钥），绑定/吊销/验签 | SQLite |
+| `session.py` | 认证层（第2层） | 有状态会话：access token(15min) + refresh token(可轮换可撤销) | SQLite |
+| `authorization.py` | 授权层（第3层） | 分级授权（小额即时/中额延迟/大额多签/超大额人工）+ 风险评分 | - |
+| `recovery.py` | 恢复层（第4层） | 社交恢复（3/5 守护者投票）+ 时间锁（7天可取消） | SQLite |
 
 **核心特性：**
 1. 零额外依赖：全部使用 Python 标准库实现，无需安装第三方包
-2. 全链路可审计：所有操作均可追溯、可验证，完全符合第二视角审计引擎的 18 维合规要求
+2. 全链路可审计：所有操作均可追溯、可验证，完全符合第二视角审计引擎的 19 维合规要求
 3. 多实现互认：提供机器可读协议标准，支持第三方企业自研实现并网
-4. 生产级安全：密钥管理、鉴权、持久化均采用行业标准安全方案
+4. 生产级安全：账户系统六层架构（身份根/凭证/会话/授权/恢复/审计），Shamir 分片托管、KMS 密钥托管、有状态可撤销会话、社交恢复机制
 
 演示运行时（`virtual_world.py`）以 `EconomySystem`、`TaskGenerator`、`NohnAgent` 装配以上各层，挂载在真实 `system.World` 上。
 
@@ -134,12 +139,17 @@ run_headless(200, verbose=True)  # 无头仿真 200 tick；有图形环境可用
 | | `NohnVisualApp` | 可视化应用 |
 | | `ConsensusEngine` | 世界参与者共识 |
 | | `SimulationEngine` | 世界仿真循环 |
-| **系统** | `World`（`system/runtime.py`） | 创世装配 + 滴答循环 + 18 维审计 + 快照 |
-| | `Storage` · `SoulLedger` · `HistoryLedger` · `EconomicReserve` · `SnapshotRegistry`（`system/ledger.py`） | 持久化 SQLite 账本（灵魂 / 历史 / 经济 / 快照） |
-| | `ConsensusNetwork` · `Governance`（`system/consensus.py`） | ≥2/3 公投共识 + 治理 |
-| | `Agent`（`system/agent_engine.py`） | 需求驱动智能体 + 记忆封印 |
+| **系统** | `World`（`system/runtime.py`） | 创世装配 + 滴答循环 + 19 维审计 + 快照 + 账户系统六层装配 |
+| | `Storage` · `SoulLedger` · `HistoryLedger` · `EconomicReserve` · `SnapshotRegistry`（`system/ledger.py`） | 持久化 SQLite 账本（灵魂 / 历史 / 经济 / 快照 / 凭证 / 会话 / 恢复） |
+| | `ConsensusNetwork` · `Governance`（`system/consensus.py`） | ≥2/3 公投共识 + 治理 + 创世引导期豁免 |
+| | `Agent`（`system/agent_engine.py`） | 需求驱动智能体 + 记忆封印 + 状态持久化 |
+| | `IdentityRoot`（`system/identity_root.py`） | 身份根 + Shamir 分片托管 |
+| | `CredentialVault`（`system/credentials.py`） | 多设备凭证管理 |
+| | `SessionManager`（`system/session.py`） | 有状态可撤销会话 |
+| | `AuthorizationEngine`（`system/authorization.py`） | 分级授权 + 风险引擎 |
+| | `RecoveryManager`（`system/recovery.py`） | 社交恢复 + 时间锁 |
 | | `ProtocolValidator`（`system/protocol.py`） | 机器可读法律校验 + 入网 |
-| | `SoulAuth` · `WorldAPI` · `serve()`（`system/api.py`） | REST + WebSocket + HMAC 认证 |
+| | `SoulAuth` · `WorldAPI`（`system/api.py`） | REST + 有状态会话鉴权 + 账户系统路由 |
 
 </div>
 
@@ -179,7 +189,7 @@ genesis_proof = build_genesis_proof(device["secret"], {"genesis_id": "my-first-s
 soul_hash = derive_soul_hash(genesis_proof)   # = SHA-256(公钥)
 world.spawn_agent(soul_hash=soul_hash, genesis_proof=genesis_proof)
 world.tick()
-print(world.audit_summary())   # 18 维第二视角审计
+print(world.audit_summary())   # 19 维第二视角审计
 ```
 
 ### C. API 集成（REST + WebSocket）
@@ -189,7 +199,7 @@ from system.api import serve
 serve(world, host="0.0.0.0", port=8000)
 ```
 
-关键端点：`GET /health`、`GET /world`、`GET /audit`、`POST /protocol/validate`、`POST /agent/spawn`、`POST /auth/issue`、`GET/POST /economy/*`、`WS /ws/world`。
+关键端点：`GET /health`、`GET /world`、`GET /audit`、`POST /protocol/validate`、`POST /agent/spawn`、`POST /auth/issue`、`POST /auth/refresh`、`POST /auth/revoke`、`GET/POST /credentials/*`、`POST /recovery/*`、`GET/POST /economy/*`。
 
 ### 定制边界
 
@@ -204,7 +214,7 @@ serve(world, host="0.0.0.0", port=8000)
 ```
 Second-Reality/
 ├── constitution_rules.py        # 宪法规则：公理 + 十条治理律法 + NOHN_LAW_AXIOMS
-├── audit_engine.py              # 第二视角审计官：18 维合规审查
+├── audit_engine.py              # 第二视角审计官：19 维合规审查（含鉴权安全）
 ├── constitution.py              # 聚合层（向后兼容再导出）
 ├── compatibility_bridge.py      # 遗留世界「海关」：语义清洗 + 物理 / 灵魂校验
 ├── virtual_world.py             # 演示运行时（GUI / 无头），挂载于 system.World
@@ -214,13 +224,18 @@ Second-Reality/
 ├── package.json                 # Node.js 依赖（文档生成工具）
 ├── system/                      # 真实实现层
 │   ├── __init__.py
-│   ├── ledger.py                #   持久化 Soul/History/Economic 账本（SQLite）
-│   ├── consensus.py             #   ≥2/3 公投共识 + 治理
-│   ├── agent_engine.py          #   需求驱动智能体 + 记忆封印
-│   ├── runtime.py               #   创世装配 + 滴答循环 + 审计报告
-│   ├── api.py                   #   REST + WebSocket + HMAC 认证
+│   ├── ledger.py                #   持久化 Soul/History/Economic 账本 + 凭证/会话/恢复表（SQLite）
+│   ├── consensus.py             #   ≥2/3 公投共识 + 治理 + 创世引导期豁免
+│   ├── agent_engine.py          #   需求驱动智能体 + 记忆封印 + 状态持久化
+│   ├── runtime.py               #   创世装配 + 滴答循环 + 19 项审计报告 + 账户系统装配
+│   ├── api.py                   #   REST + 有状态会话鉴权 + 账户系统路由 + 速率限制
 │   ├── protocol.py              #   机器可读法律模式 + 校验器
-│   └── keys.py                  #   签名密钥管理
+│   ├── keys.py                  #   签名密钥管理 + Shamir 分片 + KMS 抽象
+│   ├── identity_root.py         #   身份根（第0层）：主密钥 + Shamir 分片托管
+│   ├── credentials.py           #   凭证层（第1层）：多设备凭证管理
+│   ├── session.py               #   认证层（第2层）：有状态可撤销会话
+│   ├── authorization.py         #   授权层（第3层）：分级授权 + 风险引擎
+│   └── recovery.py              #   恢复层（第4层）：社交恢复 + 时间锁
 ├── law/                         # 通信 / 经济 / 身份 / 物理标准
 ├── tools/                       # 工具脚本
 │   ├── gen_gcae_doc.js          #   GCAE 文档生成器
