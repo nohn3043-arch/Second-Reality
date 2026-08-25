@@ -7,8 +7,8 @@
 #   - AuditConfigLoader      审计配置加载（dict / json）
 #   - AuditPlugin            单条审计插件
 #   - CognitiveAuditEngine   审计调度引擎 + reconstruct() 因果重构算子
-#   - AuditReport            18 项审计结论容器
-#   - SecondPerspectiveAuditor  宪法级 18 项合规审计器（插件化）
+#   - AuditReport            19 项审计结论容器
+#   - SecondPerspectiveAuditor  宪法级 19 项合规审计器（插件化）
 #
 # 依赖方向：audit_engine -> constitution_rules（NOHN_LAW_AXIOMS/_safe_get）
 # 逆向依赖不存在，保证裁判中立性。
@@ -128,7 +128,7 @@ class CognitiveAuditEngine:
 
 
 # ============================================================
-# 18 项宪法合规审计（底座特有，随引擎驻留审计层）
+# 19 项宪法合规审计（底座特有，随引擎驻留审计层）
 # ============================================================
 
 class AuditReport:
@@ -152,6 +152,7 @@ class AuditReport:
         ("identity_compliance", "Identity Law (law·身份确权)"),
         ("communication_compliance", "Communication Law (law·通信协议)"),
         ("physics_compliance", "Physics Law (law·物理基准)"),
+        ("auth_security", "Auth Security (账户系统·鉴权安全)"),
     ]
 
     def __init__(self):
@@ -173,7 +174,7 @@ class AuditReport:
         return bool(v)
 
     def summary(self) -> str:
-        lines = ["=== Nohn 第二视角审计（18 项维度）==="]
+        lines = ["=== Nohn 第二视角审计（19 项维度）==="]
         failed = []
         for attr, label in self.FIELDS:
             v = getattr(self, attr)
@@ -204,7 +205,7 @@ class SecondPerspectiveAuditor:
     """
     这不是世界的一部分。这是"元层"审计工具。
     它不运行世界，它审计世界是否符合蓝图。
-    底层由 CognitiveAuditEngine 驱动：18 项审计以插件形式注册，
+    底层由 CognitiveAuditEngine 驱动：19 项审计以插件形式注册，
     每次审计携带 ResponsibilityAccount 问责主体。
     """
 
@@ -224,7 +225,7 @@ class SecondPerspectiveAuditor:
         self._register_plugins()
 
     def _register_plugins(self):
-        """注册 18 项审计插件（命名与 AuditReport 字段一一对应）"""
+        """注册 19 项审计插件（命名与 AuditReport 字段一一对应）"""
         e = self.engine
         e.register_plugin(AuditPlugin("spatial_defined", lambda w: self._audit_spatial_substrate(w)))
         e.register_plugin(AuditPlugin("temporal_defined", lambda w: self._audit_temporal_substrate(w)))
@@ -244,6 +245,7 @@ class SecondPerspectiveAuditor:
         e.register_plugin(AuditPlugin("identity_compliance", lambda w: self._audit_identity_law(w)))
         e.register_plugin(AuditPlugin("communication_compliance", lambda w: self._audit_communication_law(w)))
         e.register_plugin(AuditPlugin("physics_compliance", lambda w: self._audit_physics_law(w)))
+        e.register_plugin(AuditPlugin("auth_security", lambda w: self._audit_auth_security(w)))
 
     def audit_world(self, world_instance) -> AuditReport:
         report = AuditReport()
@@ -749,6 +751,55 @@ class SecondPerspectiveAuditor:
             result["verdict"] = "FAILED - 物理常数未对齐，将物理层隔离"
         return result
 
+    def _audit_auth_security(self, world_instance) -> Dict:
+        """审计账户系统鉴权安全（六层架构）：有状态会话、多设备凭证、
+        分级授权、社交恢复、KMS 托管、共识节点真实签名。"""
+        result = {
+            "stateful_session": False,
+            "multi_credential": False,
+            "tiered_authorization": False,
+            "social_recovery": False,
+            "kms_managed": False,
+            "node_real_signature": False,
+            "verdict": "PENDING"
+        }
+        # 第2层：有状态会话（可撤销）
+        sessions = getattr(world_instance, "sessions", None)
+        if sessions is not None and hasattr(sessions, "revoke"):
+            result["stateful_session"] = True
+        # 第1层：多设备凭证
+        credentials = getattr(world_instance, "credentials", None)
+        if credentials is not None and hasattr(credentials, "bind_credential"):
+            result["multi_credential"] = True
+        # 第3层：分级授权
+        authorization = getattr(world_instance, "authorization", None)
+        if authorization is not None and hasattr(authorization, "authorize"):
+            result["tiered_authorization"] = True
+        # 第4层：社交恢复
+        recovery = getattr(world_instance, "recovery", None)
+        if recovery is not None and hasattr(recovery, "initiate_recovery"):
+            result["social_recovery"] = True
+        # KMS 托管（服务端签名密钥不直接明文落盘）
+        kms = getattr(world_instance, "kms", None)
+        if kms is not None and hasattr(kms, "get_or_create_key"):
+            result["kms_managed"] = True
+        # 共识节点真实签名：register_node 必须接受 pubkey 验签
+        consensus = getattr(world_instance, "consensus", None)
+        if consensus is not None and hasattr(consensus, "register_node"):
+            import inspect
+            params = inspect.signature(consensus.register_node).parameters
+            if "pubkey" in params:
+                result["node_real_signature"] = True
+        required = [
+            "stateful_session", "multi_credential", "tiered_authorization",
+            "social_recovery", "kms_managed", "node_real_signature",
+        ]
+        if all(result[k] for k in required):
+            result["verdict"] = "PASS - 鉴权安全六层架构就绪"
+        elif result["verdict"] == "PENDING":
+            result["verdict"] = "FAILED - 鉴权安全架构不完整"
+        return result
+
 
 # ============================================================
 # 使用示例：如何用这份蓝图"审计"一个虚拟世界
@@ -764,5 +815,5 @@ if __name__ == "__main__":
     auditor = SecondPerspectiveAuditor()
     report = auditor.audit_world(FakeWorld())
 
-    # 输出审计结果（18 项维度，覆盖第零层 + 治理层 + law 层）
+    # 输出审计结果（19 项维度，覆盖第零层 + 治理层 + law 层）
     print(report.summary())

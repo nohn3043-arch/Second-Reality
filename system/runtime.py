@@ -43,9 +43,13 @@ from .ledger import (
     derive_soul_hash,
     is_hex64,
 )
-from .keys import verify_genesis_proof
+from .keys import verify_genesis_proof, FileKmsProvider
 from .consensus import ConsensusNetwork, Governance
 from .agent_engine import MemoryVault, MemoryInalienability, Agent
+from .credentials import CredentialVault
+from .session import SessionManager
+from .authorization import AuthorizationEngine
+from .recovery import RecoveryManager
 
 
 class World:
@@ -73,6 +77,22 @@ class World:
         self.consensus = ConsensusNetwork(storage=self.storage)
         self.governance = Governance(network=self.consensus)
         self.memory_integrity = MemoryInalienability(vault=self.memory_vault)
+
+        # ---- 账户系统六层架构（第1~4层服务组件）----
+        # 第1层：多设备凭证（服务端只存公钥）
+        self.credentials = CredentialVault(storage=self.storage)
+        # 第2层：有状态会话（签名密钥经 KMS 抽象托管，可插拔 HSM）
+        self.kms = FileKmsProvider(self.storage.data_dir)
+        self.sessions = SessionManager(storage=self.storage, kms_provider=self.kms)
+        # 第3层：分级授权 + 风险引擎
+        self.authorization = AuthorizationEngine(storage=self.storage)
+        # 第4层：社交恢复 + 时间锁
+        self.recovery = RecoveryManager(
+            storage=self.storage,
+            credential_vault=self.credentials,
+            guardian_threshold=3,
+            timelock_seconds=7 * 24 * 3600,
+        )
 
         # ---- 宪法层合规外壳（构成公理 + 治理公理）----
         self.spatial_substrate = SpatialSubstrate()

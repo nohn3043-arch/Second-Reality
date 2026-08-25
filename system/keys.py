@@ -164,6 +164,85 @@ def verify_genesis_proof(genesis_proof: Dict) -> bool:
     return verify_signature(pubkey, canonical.encode("utf-8"), sig)
 
 
+# ============================================================
+# C. Shamir 秘密共享（主身份私钥分片托管，恢复层用）
+# ============================================================
+# 域素数：secp256k1 的 p = 2^256 - 2^32 - 977（确定素数）。
+# 私钥 32 字节作 256 位大整数，< p 的概率 1 - 2^-224，可忽略。
+_SHAMIR_PRIME = 2**256 - 2**32 - 977
+
+
+def _eval_poly(coeffs, x, prime):
+    """霍纳法求多项式值：coeffs[0] 为常数项（秘密）。"""
+    y = 0
+    for c in reversed(coeffs):
+        y = (y * x + c) % prime
+    return y
+
+
+def _lagrange_at_zero(points, prime):
+    """拉格朗日插值在 x=0 处的值（即恢复的秘密）。"""
+    result = 0
+    for i, (xi, yi) in enumerate(points):
+        num = 1
+        den = 1
+        for j, (xj, _) in enumerate(points):
+            if i == j:
+                continue
+            num = (num * (0 - xj)) % prime
+            den = (den * (xi - xj)) % prime
+        result = (result + yi * num * pow(den, prime - 2, prime)) % prime
+    return result
+
+
+def shamir_split(secret_bytes: bytes, threshold: int, num_shares: int):
+    """把 secret_bytes 拆成 num_shares 份，任意 threshold 份可恢复。
+
+    返回 [(x, y), ...]，x 从 1 开始递增；y 为域内整数。
+    """
+    if not (1 <= threshold <= num_shares):
+        raise ValueError("threshold must satisfy 1 <= threshold <= num_shares")
+    secret_int = int.from_bytes(secret_bytes, "big")
+    if secret_int >= _SHAMIR_PRIME:
+        raise ValueError("secret too large for Shamir field")
+    coeffs = [secret_int] + [
+        secrets.randbelow(_SHAMIR_PRIME) for _ in range(threshold - 1)
+    ]
+    shares = []
+    for x in range(1, num_shares + 1):
+        shares.append((x, _eval_poly(coeffs, x, _SHAMIR_PRIME)))
+    return shares
+
+
+def shamir_combine(shares) -> bytes:
+    """由任意 threshold 份分片恢复原始 secret_bytes（32 字节）。"""
+    if not shares:
+        raise ValueError("no shares provided")
+    secret_int = _lagrange_at_zero(shares, _SHAMIR_PRIME)
+    return secret_int.to_bytes(32, "big")
+
+
+# ============================================================
+# D. 服务端签名密钥托管抽象（KMS，可插拔 HSM）
+# ============================================================
+
+class KmsKeyProvider:
+    """服务端签名密钥托管抽象。默认文件后端，生产可替换为 HSM/云 KMS。"""
+
+    def get_or_create_key(self, key_id: str) -> bytes:
+        raise NotImplementedError
+
+
+class FileKmsProvider(KmsKeyProvider):
+    """文件后端 KMS：密钥落盘到 key_dir/key_id（生产应替换为 HSM）。"""
+
+    def __init__(self, key_dir: str):
+        self.key_dir = key_dir
+
+    def get_or_create_key(self, key_id: str) -> bytes:
+        return load_or_create_key(os.path.join(self.key_dir, key_id))
+
+
 __all__ = [
     "generate_key",
     "load_or_create_key",
@@ -174,4 +253,8 @@ __all__ = [
     "verify_signature",
     "build_genesis_proof",
     "verify_genesis_proof",
+    "shamir_split",
+    "shamir_combine",
+    "KmsKeyProvider",
+    "FileKmsProvider",
 ]

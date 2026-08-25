@@ -130,6 +130,54 @@ class Storage:
             value TEXT NOT NULL
         )
         """,
+        # ---- 账户系统六层架构新增表（第1~4层） ----
+        """
+        CREATE TABLE IF NOT EXISTS credentials (
+            soul_hash     TEXT NOT NULL,
+            credential_id TEXT NOT NULL,
+            public_key    TEXT NOT NULL,
+            device_label  TEXT,
+            created_at    REAL NOT NULL,
+            revoked       INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (soul_hash, credential_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_id   TEXT PRIMARY KEY,
+            soul_hash    TEXT NOT NULL,
+            refresh_hash TEXT NOT NULL,
+            created_at   REAL NOT NULL,
+            expires_at   REAL NOT NULL,
+            revoked      INTEGER NOT NULL DEFAULT 0
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS recovery_requests (
+            request_id     TEXT PRIMARY KEY,
+            soul_hash      TEXT NOT NULL,
+            new_public_key TEXT NOT NULL,
+            created_at     REAL NOT NULL,
+            timelock_until REAL NOT NULL,
+            status         TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS guardians (
+            soul_hash    TEXT NOT NULL,
+            guardian_soul TEXT NOT NULL,
+            created_at   REAL NOT NULL,
+            PRIMARY KEY (soul_hash, guardian_soul)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS recovery_votes (
+            request_id    TEXT NOT NULL,
+            guardian_soul TEXT NOT NULL,
+            ts            REAL NOT NULL,
+            PRIMARY KEY (request_id, guardian_soul)
+        )
+        """,
     ]
 
     def __init__(self, data_dir: Optional[str] = None):

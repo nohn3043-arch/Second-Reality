@@ -191,7 +191,10 @@ class WorldAPI:
         self, method: str, path: str, body: Dict, token: Optional[str]
     ) -> tuple:
         """返回 (status, payload_dict)。"""
-        soul = self.auth.verify(token, self.world.soul_ledger)
+        # 有状态会话验证（可撤销）；灵魂未注册则 token 无效
+        soul = self.world.sessions.verify(token)
+        if soul is not None and not self.world.soul_ledger.exists(soul):
+            soul = None
 
         # 无需鉴权：健康检查
         if path == "/health":
@@ -315,7 +318,94 @@ class WorldAPI:
                 return 403, {"error": "灵魂无注册公钥（旧版身份），拒绝签发"}
             if not self.auth.verify_challenge(soul_hash, nonce, signature, pubkey):
                 return 403, {"error": "挑战签名校验失败：私钥不匹配或 nonce 已失效"}
-            return 200, {"token": self.auth.issue(soul_hash)}
+            access_token, refresh_token = self.world.sessions.issue(soul_hash)
+            return 200, {
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+            }
+
+        # ---- 会话刷新 / 吊销（第2层：有状态 session）----
+        if method == "POST" and path == "/auth/refresh":
+            refresh_token = body.get("refresh_token", "")
+            result = self.world.sessions.refresh(refresh_token)
+            if result is None:
+                return 403, {"error": "refresh token 无效或已过期"}
+            access_token, new_refresh = result
+            return 200, {"access_token": access_token, "refresh_token": new_refresh}
+        if method == "POST" and path == "/auth/revoke":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            self.world.sessions.revoke(soul)
+            return 200, {"revoked": True}
+
+        # ---- 凭证管理（第1层：多设备凭证）----
+        if method == "POST" and path == "/credentials/bind":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            pubkey_b64 = body.get("public_key", "")
+            device_label = body.get("device_label", "")
+            try:
+                pubkey = base64.b64decode(pubkey_b64)
+            except Exception:
+                return 400, {"error": "public_key 必须为 base64 编码"}
+            credential_id = self.world.credentials.bind_credential(
+                soul, pubkey, device_label
+            )
+            return 201, {"credential_id": credential_id}
+        if method == "POST" and path == "/credentials/revoke":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            credential_id = body.get("credential_id", "")
+            self.world.credentials.revoke_credential(soul, credential_id)
+            return 200, {"revoked": True}
+        if method == "GET" and path == "/credentials/list":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            creds = self.world.credentials.get_credentials(soul)
+            creds = [
+                {
+                    "credential_id": c["credential_id"],
+                    "public_key": base64.b64encode(c["public_key"]).decode("ascii"),
+                    "device_label": c["device_label"],
+                    "revoked": c["revoked"],
+                }
+                for c in creds
+            ]
+            return 200, {"credentials": creds}
+
+        # ---- 恢复（第4层：社交恢复 + 时间锁）----
+        if method == "POST" and path == "/recovery/guardian/add":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            guardian_soul = body.get("guardian_soul", "")
+            self.world.recovery.add_guardian(soul, guardian_soul)
+            return 200, {"added": True}
+        if method == "POST" and path == "/recovery/initiate":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            new_public_key = body.get("new_public_key", "")
+            request_id = self.world.recovery.initiate_recovery(soul, new_public_key)
+            return 201, {"request_id": request_id}
+        if method == "POST" and path == "/recovery/approve":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            request_id = body.get("request_id", "")
+            ok = self.world.recovery.approve_recovery(request_id, soul)
+            return (200 if ok else 403), {"approved": ok}
+        if method == "POST" and path == "/recovery/cancel":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            request_id = body.get("request_id", "")
+            self.world.recovery.cancel_recovery(request_id)
+            return 200, {"cancelled": True}
+        if method == "POST" and path == "/recovery/finalize":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            request_id = body.get("request_id", "")
+            credential_id = self.world.recovery.finalize_recovery(request_id)
+            if credential_id is None:
+                return 403, {"error": "恢复未就绪：时间锁未到期或票数不足"}
+            return 200, {"credential_id": credential_id}
 
         # ---- 互认协议 ----
         if method == "GET" and path == "/protocol/schemas":

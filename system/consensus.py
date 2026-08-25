@@ -13,12 +13,14 @@
 # 禁止单点越权。freeze_soul / shutdown_world 硬编码返回 False（宪法级禁止）。
 # ============================================================
 
+import base64
 import hashlib
 import json
 import time
 from typing import Any, Dict, List, Optional
 
 from .ledger import Storage
+from .keys import verify_signature
 from constitution_rules import CONSENSUS_THRESHOLD  # 宪法第十条：全球公投阈值（≥2/3，单一权威来源）
 
 
@@ -56,11 +58,27 @@ class ConsensusNetwork:
         for row in self._storage.query("SELECT node_id, signature FROM nodes"):
             self.nodes[row[0]] = row[1]
 
-    def register_node(self, node_id: str, signature: Optional[str] = None) -> bool:
-        """注册独立共识节点。node_id 唯一，不可重复注册。"""
+    def register_node(
+        self,
+        node_id: str,
+        signature: Optional[bytes] = None,
+        pubkey: Optional[bytes] = None,
+    ) -> bool:
+        """注册独立共识节点。node_id 唯一，不可重复注册。
+
+        若提供 signature + pubkey，则验签（Ed25519，签名内容为 node_id），
+        验签失败拒绝注册；若均未提供（创世引导），签名标记为 unverified
+        占位，不冒充真实签名。
+        """
         if not node_id or node_id in self.nodes:
             return False
-        sig = signature or _sha256(node_id)
+        if signature is not None and pubkey is not None:
+            if not verify_signature(pubkey, node_id.encode("utf-8"), signature):
+                return False  # 签名无效，拒绝注册
+            sig = base64.b64encode(signature).decode("ascii")
+        else:
+            # 创世引导：明确标记未验签，不冒充真实签名
+            sig = "unverified:" + _sha256(node_id)
         self.nodes[node_id] = sig
         self._storage.execute(
             "INSERT OR REPLACE INTO nodes (node_id, signature, registered_at) "
