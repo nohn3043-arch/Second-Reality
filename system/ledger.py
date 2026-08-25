@@ -31,6 +31,11 @@ _DEFAULT_DATA_DIR = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, ".world_data")
 )
 
+# 规模警告阈值（单 SQLite 文件不建议超过此量级）
+_SOUL_COUNT_WARN = 1_000_000       # 百万灵魂：单 stdout WARN
+_SOUL_COUNT_HARD_BLOCK = 100_000_000  # 一亿灵魂：必须显式确认分片路由（否则 RuntimeError）
+_SOUL_COUNT_HARD_BLOCK_ENV = "NOHN_ALLOW_SINGLE_SHARD_OVER_BLOCK"
+
 
 def _sha256_hex(payload: str) -> str:
     """SHA-256 输出 64 位十六进制（对齐 NOHN_LAW_AXIOMS soul_hash_len=64）"""
@@ -95,6 +100,25 @@ class SingleShardRouter(ShardRouter):
 
     def shard_of(self, soul_hash: str) -> str:
         return "0"
+
+
+class HashShardRouter(ShardRouter):
+    """哈希分片路由：按 soul_hash 前 N 位十六进制均匀映射到 16**N 个分片。
+
+    用途：生产多 DC 部署。每个分片对应独立 Storage 节点（连接由外部注入）。
+    本抽象不直接管理连接——分片实现负责建立该分片的连接/上下文。
+    示例：HashShardRouter(prefix_len=2).shard_of("ab12...") -> "ab"
+    """
+
+    def __init__(self, prefix_len: int = 2):
+        if not (1 <= prefix_len <= 16):
+            raise ValueError("prefix_len must be 1..16")
+        self.prefix_len = prefix_len
+
+    def shard_of(self, soul_hash: str) -> str:
+        if not isinstance(soul_hash, str) or len(soul_hash) < self.prefix_len:
+            return "0"  # 容错：未注册灵魂落默认分片
+        return soul_hash[: self.prefix_len].lower()
 
 
 # ============================================================
@@ -243,6 +267,9 @@ class Storage:
     ):
         self.backend = backend if backend in ("sqlite", "memory") else "sqlite"
         self.router = shard_router or SingleShardRouter()
+        # 事务深度：>0 表示在显式事务内，execute 不自动 commit
+        # （提交/回滚由事务上下文管理器统一负责）
+        self._tx_depth = 0
         # 密钥等数据目录照常保留（memory 仅账本连接不落盘）
         self.data_dir = data_dir or _DEFAULT_DATA_DIR
         if self.backend == "memory":
@@ -251,7 +278,8 @@ class Storage:
             for ddl in self._SCHEMA:
                 self._conn.execute(ddl)
             self._conn.commit()
-            self._lock = threading.Lock()
+            # RLock 支持事务内嵌套 execute（事务已持锁，execute 再次获取不死锁）
+            self._lock = threading.RLock()
             return
         os.makedirs(self.data_dir, exist_ok=True)
         db_path = os.path.join(self.data_dir, "ledger.sqlite3")
@@ -260,7 +288,8 @@ class Storage:
         for ddl in self._SCHEMA:
             self._conn.execute(ddl)
         self._conn.commit()
-        self._lock = threading.Lock()
+        # RLock 支持事务内嵌套 execute（事务已持锁，execute 再次获取不死锁）
+        self._lock = threading.RLock()
 
     def shard_of(self, soul_hash: str) -> str:
         """返回 soul_hash 归属分片（部署层路由契约）。"""
@@ -272,7 +301,9 @@ class Storage:
             self.router.shard_of(shard_key)
         with self._lock:
             self._conn.execute(sql, params)
-            self._conn.commit()
+            # 事务内不自动提交（提交/回滚由事务上下文管理器统一负责）
+            if self._tx_depth == 0:
+                self._conn.commit()
 
     def query(self, sql: str, params: tuple = (), shard_key: Optional[str] = None) -> List[tuple]:
         if shard_key is not None:
@@ -280,9 +311,52 @@ class Storage:
         with self._lock:
             return self._conn.execute(sql, params).fetchall()
 
+    def transaction(self):
+        """事务上下文管理器：多步操作原子化（任一失败回滚全部）。
+
+        用法：
+            with storage.transaction():
+                storage.execute("UPDATE ...", ...)
+                storage.execute("INSERT ...", ...)
+        说明：内部使用 BEGIN IMMEDIATE 抢占写锁，避免 SQLITE_BUSY。
+        """
+        return _StorageTransaction(self)
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+
+class _StorageTransaction:
+    """Storage 事务上下文管理器（实现 BEGIN / COMMIT / ROLLBACK）。"""
+
+    def __init__(self, storage: "Storage"):
+        self._storage = storage
+        self._entered = False
+
+    def __enter__(self):
+        # 必须持有 storage 锁后再 BEGIN，否则与其他 execute() 锁竞争
+        self._storage._lock.acquire()
+        try:
+            self._storage._conn.execute("BEGIN IMMEDIATE")
+            self._storage._tx_depth += 1
+            self._entered = True
+        except Exception:
+            self._storage._lock.release()
+            raise
+        return self._storage
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is None:
+                self._storage._conn.commit()
+            else:
+                self._storage._conn.rollback()
+        finally:
+            self._storage._tx_depth -= 1
+            assert self._storage._tx_depth >= 0
+            self._storage._lock.release()
+            self._entered = False
 
 
 # ============================================================
@@ -347,6 +421,26 @@ class SoulLedger:
             return None
         if soul_hash in self.souls or self._db_get(soul_hash) is not None:
             return None  # 不可重复注册
+        # 规模护栏：单分片 SQLite 超过硬上限时阻止注册（除非显式 opt-in）
+        existing = self._storage.query("SELECT COUNT(*) FROM souls")
+        count = existing[0][0] if existing else 0
+        if count >= _SOUL_COUNT_HARD_BLOCK:
+            if isinstance(self._storage.router, SingleShardRouter) and not os.environ.get(
+                _SOUL_COUNT_HARD_BLOCK_ENV
+            ):
+                raise RuntimeError(
+                    f"单分片 SQLite 灵魂数 {count} 已达硬上限 "
+                    f"{_SOUL_COUNT_HARD_BLOCK}；生产部署必须配置分片路由 "
+                    f"(HashShardRouter + 独立存储节点)，或显式设置环境变量 "
+                    f"{_SOUL_COUNT_HARD_BLOCK_ENV}=1 临时放行"
+                )
+        elif count >= _SOUL_COUNT_WARN and isinstance(self._storage.router, SingleShardRouter):
+            import sys
+            print(
+                f"[ledger] 警告：单分片灵魂数 {count} 已超 "
+                f"{_SOUL_COUNT_WARN}，建议切换 HashShardRouter 多分片部署",
+                file=sys.stderr,
+            )
         identity = {
             "soul_hash": soul_hash,
             "soul_hash_sha256": True,  # law 身份确权：SHA-256 / 64 hex

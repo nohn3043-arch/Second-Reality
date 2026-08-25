@@ -753,11 +753,21 @@ class SecondPerspectiveAuditor:
 
     def _audit_auth_security(self, world_instance) -> Dict:
         """审计账户系统鉴权安全（六层架构）：有状态会话、多设备凭证、
-        分级授权、社交恢复、KMS 托管、共识节点真实签名。"""
+        分级授权、社交恢复、KMS 托管、共识节点真实签名。
+
+        【隔离】本审计使用 :memory: 独立测试存储，禁止触碰 world_instance
+        的真实账本。每次审计随机生成唯一 soul_hash，结束后随进程释放。
+        """
         import secrets
         import time
-        from system.keys import generate_user_keypair
-        
+        from system.keys import generate_user_keypair, FileKmsProvider
+        from system.ledger import Storage
+        from system.credentials import CredentialVault
+        from system.session import SessionManager, MemorySessionStore
+        from system.recovery import RecoveryManager
+        from system.authorization import AuthorizationEngine
+        from system.consensus import ConsensusNetwork
+
         result = {
             "stateful_session": False,
             "multi_credential": False,
@@ -768,114 +778,127 @@ class SecondPerspectiveAuditor:
             "verdict": "PENDING"
         }
 
-        # 1. 第2层：有状态会话（可撤销）：真实签发+验证+吊销
-        sessions = getattr(world_instance, "sessions", None)
-        if sessions:
-            try:
-                test_soul = "deadbeef" * 8  # 64位hex
-                # 签发token
-                access, refresh = sessions.issue(test_soul)
-                # 验证token有效
-                verified = sessions.verify(access) == test_soul
-                if verified:
-                    # 吊销特定会话（不是全部），再验证refresh无效
-                    # 从sessions表查session_id（通过refresh_hash）
-                    import hashlib
-                    refresh_hash = hashlib.sha256(refresh.encode()).hexdigest()
-                    # 优先用公开查询接口（三种会话后端通吃），旧实现回退 _storage
-                    session_id = getattr(sessions, "get_session_id", None)
-                    if callable(session_id):
-                        session_id = session_id(refresh_hash)
-                    else:
-                        rows = sessions._storage.query(
-                            "SELECT session_id FROM sessions WHERE refresh_hash=?",
-                            (refresh_hash,)
-                        )
-                        session_id = rows[0][0] if rows else None
-                    if session_id:
-                        sessions.revoke(test_soul, session_id=session_id)
-                        # 新签发一个token验证正常（不影响其他会话）
-                        access2, _ = sessions.issue(test_soul)
-                        still_works = sessions.verify(access2) == test_soul
-                        result["stateful_session"] = still_works
-                    else:
-                        result["stateful_session"] = verified
-            except Exception:
-                result["stateful_session"] = False
+        # ---- 隔离：使用 :memory: 独立测试账本（不污染 world_instance）----
+        iso_storage = Storage(backend="memory")
+        iso_kms = FileKmsProvider(key_dir=iso_storage.data_dir or "/tmp/audit-iso")
+        iso_session_store = MemorySessionStore()
+        iso_credentials = CredentialVault(storage=iso_storage)
+        iso_sessions = SessionManager(
+            storage=iso_storage,
+            kms_provider=iso_kms,
+            session_store=iso_session_store,
+        )
+        iso_recovery = RecoveryManager(
+            storage=iso_storage,
+            credential_vault=iso_credentials,
+        )
+        iso_authorization = AuthorizationEngine(
+            storage=iso_storage,
+            recovery_manager=iso_recovery,
+        )
+        iso_consensus = ConsensusNetwork(storage=iso_storage)
 
-        # 2. 第1层：多设备凭证：真实绑定+验证+吊销
-        credentials = getattr(world_instance, "credentials", None)
-        if credentials:
-            try:
-                test_soul = "cafebabe" * 8
-                kp = generate_user_keypair()
-                pubkey = kp["pubkey"]
-                # 绑定凭证
-                cred_id = credentials.bind_credential(test_soul, pubkey, "test-device")
-                if cred_id:
-                    # 验证签名
-                    msg = secrets.token_bytes(32)
-                    sig = kp["secret"] + b"\x00" * 32  # 伪造合法签名（仅测绑定存在）
-                    valid = credentials.verify_credential(test_soul, cred_id, msg, sig) or True  # 验签部分单独测试
-                    # 吊销后验证失败
-                    credentials.revoke_credential(test_soul, cred_id)
-                    revoked = not credentials.verify_credential(test_soul, cred_id, msg, sig)
-                    result["multi_credential"] = bool(cred_id) and revoked
-            except Exception:
-                result["multi_credential"] = False
+        # 随机唯一 soul_hash（不与生产碰撞）
+        rand_suffix = secrets.token_hex(24)
+        s_session = ("aa" * 30 + rand_suffix[:4])[:64]
+        s_cred = ("bb" * 30 + rand_suffix[4:8])[:64]
+        s_authz = ("cc" * 30 + rand_suffix[8:12])[:64]
+        s_recover = ("dd" * 30 + rand_suffix[12:16])[:64]
+
+        # 1. 第2层：有状态会话（可撤销）：真实签发+验证+吊销
+        try:
+            access, refresh = iso_sessions.issue(s_session)
+            verified = iso_sessions.verify(access) == s_session
+            if verified:
+                import hashlib
+                refresh_hash = hashlib.sha256(refresh.encode()).hexdigest()
+                session_id = iso_session_store.get_session_id(refresh_hash) \
+                    if hasattr(iso_session_store, "get_session_id") else None
+                if session_id is None:
+                    rows = iso_storage.query(
+                        "SELECT session_id FROM sessions WHERE refresh_hash=?",
+                        (refresh_hash,),
+                    )
+                    session_id = rows[0][0] if rows else None
+                if session_id:
+                    iso_sessions.revoke(s_session, session_id=session_id)
+                    access2, _ = iso_sessions.issue(s_session)
+                    still_works = iso_sessions.verify(access2) == s_session
+                    result["stateful_session"] = still_works
+                else:
+                    result["stateful_session"] = verified
+        except Exception:
+            result["stateful_session"] = False
+
+        # 2. 第1层：多设备凭证：真实绑定+签名验证+吊销+假签名拒绝
+        try:
+            kp = generate_user_keypair()
+            pubkey = kp["pubkey"]
+            cred_id = iso_credentials.bind_credential(s_cred, pubkey, "test-device")
+            if cred_id:
+                from system.keys import sign_with_device
+                msg = secrets.token_bytes(32)
+                sig = sign_with_device(kp["secret"], msg)
+                valid = iso_credentials.verify_credential(s_cred, cred_id, msg, sig)
+                iso_credentials.revoke_credential(s_cred, cred_id)
+                revoked = not iso_credentials.verify_credential(s_cred, cred_id, msg, sig)
+                fake_sig = b"\x00" * 64
+                fake_rejected = not iso_credentials.verify_credential(
+                    s_cred, cred_id, msg, fake_sig
+                )
+                result["multi_credential"] = (
+                    bool(cred_id) and valid and revoked and fake_rejected
+                )
+        except Exception:
+            result["multi_credential"] = False
 
         # 3. 第3层：分级授权：真实授权逻辑
-        authorization = getattr(world_instance, "authorization", None)
-        if authorization:
-            try:
-                test_soul = "12345678" * 8
-                # 小额操作应该即时放行
-                dec_small = authorization.authorize(test_soul, "redeem", 100)
-                small_ok = dec_small["allowed"] and dec_small["tier"] == "small"
-                # 大额操作应该返回延迟
-                dec_large = authorization.authorize(test_soul, "redeem", 1_000_000)
-                large_ok = not dec_large["allowed"] and "op_id" in dec_large and dec_large["execute_at"] > time.time()
-                result["tiered_authorization"] = small_ok and large_ok
-            except Exception:
-                result["tiered_authorization"] = False
+        try:
+            dec_small = iso_authorization.authorize(s_authz, "redeem", 100)
+            small_ok = dec_small["allowed"] and dec_small["tier"] == "small"
+            dec_large = iso_authorization.authorize(s_authz, "redeem", 1_000_000)
+            large_ok = (
+                not dec_large["allowed"]
+                and "op_id" in dec_large
+                and dec_large["execute_at"] > time.time()
+            )
+            result["tiered_authorization"] = small_ok and large_ok
+        except Exception:
+            result["tiered_authorization"] = False
 
         # 4. 第4层：社交恢复：真实添加守护者+发起恢复
-        recovery = getattr(world_instance, "recovery", None)
-        if recovery:
-            try:
-                test_soul = "abcdef12" * 8
-                guardian1 = "11111111" * 8
-                # 添加守护者
-                add_ok = recovery.add_guardian(test_soul, guardian1) or True  # 存在则幂等
-                # 发起恢复请求
-                new_pubkey = generate_user_keypair()["pubkey"]
-                req_id = recovery.initiate_recovery(test_soul, new_pubkey.hex())
-                result["social_recovery"] = add_ok and req_id is not None
-            except Exception:
-                result["social_recovery"] = False
+        try:
+            guardian1 = ("ee" * 30 + rand_suffix[16:20])[:64]
+            add_ok = iso_recovery.add_guardian(s_recover, guardian1)
+            new_pubkey = generate_user_keypair()["pubkey"]
+            req_id = iso_recovery.initiate_recovery(s_recover, new_pubkey.hex())
+            result["social_recovery"] = bool(add_ok) and bool(req_id)
+        except Exception:
+            result["social_recovery"] = False
 
         # 5. KMS 托管：真实生成密钥，非空
-        kms = getattr(world_instance, "kms", None)
-        if kms:
-            try:
-                key = kms.get_or_create_key("audit-test-key")
-                result["kms_managed"] = isinstance(key, bytes) and len(key) == 32
-            except Exception:
-                result["kms_managed"] = False
+        try:
+            key = iso_kms.get_or_create_key("audit-test-key")
+            result["kms_managed"] = isinstance(key, bytes) and len(key) == 32
+        except Exception:
+            result["kms_managed"] = False
 
         # 6. 共识节点真实签名：register_node 接受 pubkey 参数
-        consensus = getattr(world_instance, "consensus", None)
-        if consensus:
-            try:
-                import inspect
-                params = inspect.signature(consensus.register_node).parameters
-                if "pubkey" in params:
-                    # 尝试注册测试节点
-                    pubkey = generate_user_keypair()["pubkey"].hex()
-                    node_id = consensus.register_node("test-node", pubkey) or True
-                    result["node_real_signature"] = "pubkey" in params and bool(node_id)
-            except Exception:
-                result["node_real_signature"] = False
+        try:
+            import inspect
+            params = inspect.signature(iso_consensus.register_node).parameters
+            if "pubkey" in params:
+                pubkey = generate_user_keypair()["pubkey"].hex()
+                node_id = iso_consensus.register_node("test-node", pubkey)
+                result["node_real_signature"] = bool(node_id)
+        except Exception:
+            result["node_real_signature"] = False
+
+        # 释放隔离测试账本
+        try:
+            iso_storage.close()
+        except Exception:
+            pass
 
         required = [
             "stateful_session", "multi_credential", "tiered_authorization",

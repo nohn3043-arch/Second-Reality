@@ -197,11 +197,21 @@ class SessionManager:
     def _sign(self, payload: bytes) -> bytes:
         return hmac.new(self._signing_key(), payload, hashlib.sha256).digest()
 
-    def issue(self, soul_hash: str):
-        """签发 access + refresh。返回 (access_token, refresh_token)。"""
+    def issue(self, soul_hash: str, pubkey_fingerprint: str = ""):
+        """签发 access + refresh。返回 (access_token, refresh_token)。
+
+        参数：
+          pubkey_fingerprint  设备公钥指纹（SHA-256(公钥) 的前 32 hex）。绑定到
+                              access token：若此设备凭证被吊销（/credentials/revoke），
+                              所有关联 access token 立即失效。
+                              为空时按"无设备绑定"旧模式签发（仅 soul 维度）。
+        """
         now = time.time()
         exp = now + self.access_ttl
-        payload = json.dumps({"soul": soul_hash, "exp": exp}, sort_keys=True).encode("utf-8")
+        payload_dict = {"soul": soul_hash, "exp": exp}
+        if pubkey_fingerprint:
+            payload_dict["pkfp"] = pubkey_fingerprint
+        payload = json.dumps(payload_dict, sort_keys=True).encode("utf-8")
         access_token = (
             base64.urlsafe_b64encode(payload).decode("ascii")
             + "."
@@ -213,8 +223,13 @@ class SessionManager:
         self._store.save(session_id, soul_hash, refresh_hash, now, now + self.refresh_ttl)
         return access_token, refresh_token
 
-    def verify(self, access_token: str):
-        """验 access token，返回 soul_hash 或 None。支持标准 Bearer 前缀。"""
+    def verify(self, access_token: str, credential_vault=None):
+        """验 access token，返回 soul_hash 或 None。支持标准 Bearer 前缀。
+
+        参数：
+          credential_vault  若提供，则额外校验 token 中绑定的 pubkey_fingerprint
+                            对应凭证未被吊销（/credentials/revoke 后即时失效）。
+        """
         if not access_token:
             return None
         # 剥离标准Bearer头
@@ -234,10 +249,26 @@ class SessionManager:
             return None
         if data.get("exp", 0) < time.time():
             return None
+        # 设备绑定校验：若 token 包含 pkfp，则对应凭证必须仍有效
+        pkfp = data.get("pkfp")
+        if pkfp and credential_vault is not None:
+            soul = data.get("soul")
+            # 查找 pkfp 对应凭证是否仍激活
+            creds = credential_vault.get_credentials(soul)
+            valid_pkfp = any(
+                hashlib.sha256(c["public_key"]).hexdigest()[: len(pkfp)] == pkfp
+                and not c["revoked"]
+                for c in creds
+            )
+            if not valid_pkfp:
+                return None  # 凭证已吊销，token 立即失效
         return data.get("soul")
 
-    def refresh(self, refresh_token: str):
-        """轮换 refresh token，返回新的 (access_token, refresh_token) 或 None。"""
+    def refresh(self, refresh_token: str, pubkey_fingerprint: str = ""):
+        """轮换 refresh token，返回新的 (access_token, refresh_token) 或 None。
+
+        关键修复：先 issue 新 session，再 revoke 旧 session（任一失败不留中间态）。
+        """
         refresh_hash = hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()
         entry = self._store.get_by_refresh(refresh_hash)
         if not entry:
@@ -245,9 +276,14 @@ class SessionManager:
         session_id, soul_hash, expires_at, revoked = entry
         if revoked or expires_at < time.time():
             return None
-        # 轮换：吊销旧 session，签发新 session（防重放）
-        self._store.revoke(soul_hash, session_id)
-        return self.issue(soul_hash)
+        try:
+            # 先签发新 session（成功才继续）
+            new_pair = self.issue(soul_hash, pubkey_fingerprint=pubkey_fingerprint)
+            # 新 session 落库后再吊销旧 session（顺序保证失败时旧 session 仍可用）
+            self._store.revoke(soul_hash, session_id)
+            return new_pair
+        except Exception:
+            return None
 
     def revoke(self, soul_hash: str, session_id: str = None) -> bool:
         """吊销会话。session_id 为 None 时吊销该 soul 全部会话。"""

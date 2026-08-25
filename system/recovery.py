@@ -85,7 +85,11 @@ class RecoveryManager:
         return True
 
     def finalize_recovery(self, request_id: str):
-        """时间锁到期 + 票数达标 → 换新凭证。返回新 credential_id 或 None。"""
+        """时间锁到期 + 票数达标 → 换新凭证。返回新 credential_id 或 None。
+
+        关键路径用 storage.transaction() 包为原子操作：vote_count + bind_credential
+        + status update 全部成功才提交；任一失败整体回滚，杜绝"半完成恢复"状态。
+        """
         rows = self._storage.query(
             "SELECT soul_hash, new_public_key, timelock_until, status "
             "FROM recovery_requests WHERE request_id=?",
@@ -100,10 +104,17 @@ class RecoveryManager:
             return None  # 时间锁未到期
         if self.vote_count(request_id) < self.guardian_threshold:
             return None  # 票数不足
-        pubkey = base64.b64decode(new_public_key_b64)
-        credential_id = self._credentials.bind_credential(soul_hash, pubkey, "recovered")
-        self._storage.execute(
-            "UPDATE recovery_requests SET status='finalized' WHERE request_id=?",
-            (request_id,),
-        )
+        try:
+            with self._storage.transaction():
+                pubkey = base64.b64decode(new_public_key_b64)
+                # bind_credential 在事务内落库；回滚时新凭证不会被持久化
+                credential_id = self._credentials.bind_credential(
+                    soul_hash, pubkey, "recovered"
+                )
+                self._storage.execute(
+                    "UPDATE recovery_requests SET status='finalized' WHERE request_id=?",
+                    (request_id,),
+                )
+        except Exception:
+            return None
         return credential_id

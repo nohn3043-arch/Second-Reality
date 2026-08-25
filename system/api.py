@@ -117,6 +117,14 @@ class ChallengeManager:
         self._rate_limit: Dict[str, list] = defaultdict(list)
         self._rate_window = 60
         self._rate_max = 5
+        # 全局 IP 速率限制：每 IP 60s 内最多 20 次挑战签发（防 per-soul 限流绕过）
+        self._ip_rate: Dict[str, list] = defaultdict(list)
+        self._ip_rate_window = 60
+        self._ip_rate_max = 20
+        # IP 注册（Soul 创世）速率：每 IP 24h 内最多 10 次，防 Sybil
+        self._spawn_ip_rate: Dict[str, list] = defaultdict(list)
+        self._spawn_window = 86400
+        self._spawn_max = 10
 
     def _check_rate(self, soul_hash: str) -> bool:
         """检查速率限制。返回 True 表示允许，False 表示超限。"""
@@ -129,10 +137,43 @@ class ChallengeManager:
         self._rate_limit[soul_hash].append(now)
         return True
 
-    def issue_challenge(self, soul_hash: str) -> str:
+    def _check_ip_rate(self, ip: str) -> bool:
+        """全局 IP 速率限制（防遍历 soul_hash 绕过 per-soul 限流）。
+
+        每个 IP 60s 最多 20 次挑战签发——即使攻击者遍历 1M 随机 soul_hash，
+        每个新 hash 仍受 IP 维度限制，攻击速率被钉死在 ~20/60s ≈ 0.33/s。
+        """
+        if not ip:
+            return True  # IP 未知时容许（不阻断内部调用）
+        now = time.time()
+        window = self._ip_rate_window
+        self._ip_rate[ip] = [t for t in self._ip_rate[ip] if now - t < window]
+        if len(self._ip_rate[ip]) >= self._ip_rate_max:
+            return False
+        self._ip_rate[ip].append(now)
+        return True
+
+    def _check_spawn_ip_rate(self, ip: str) -> bool:
+        """创世注册 IP 速率限制：每 IP 24h 最多 10 次新灵魂注册。
+
+        防御 Sybil：单 IP 不能造 >10 个灵魂/天。需要 KYC 邀请或 PoW 进一步放行。
+        """
+        if not ip:
+            return True
+        now = time.time()
+        window = self._spawn_window
+        self._spawn_ip_rate[ip] = [t for t in self._spawn_ip_rate[ip] if now - t < window]
+        if len(self._spawn_ip_rate[ip]) >= self._spawn_max:
+            return False
+        self._spawn_ip_rate[ip].append(now)
+        return True
+
+    def issue_challenge(self, soul_hash: str, ip: str = "") -> str:
         """下发一次性 nonce（未绑定的旧 nonce 被覆盖，天然失效）。"""
         if not self._check_rate(soul_hash):
-            return None  # 速率超限
+            return None  # per-soul 速率超限
+        if not self._check_ip_rate(ip):
+            return None  # 全局 IP 速率超限
         nonce = secrets.token_hex(16)
         with self._lock:
             self.challenges[soul_hash] = {
@@ -169,11 +210,14 @@ class WorldAPI:
 
     # ---- 路由分发 ----
     def dispatch(
-        self, method: str, path: str, body: Dict, token: Optional[str]
+        self, method: str, path: str, body: Dict, token: Optional[str],
+        client_ip: str = "",
     ) -> tuple:
         """返回 (status, payload_dict)。"""
-        # 有状态会话验证（可撤销）；灵魂未注册则 token 无效
-        soul = self.world.sessions.verify(token)
+        # 有状态会话验证（可撤销）；灵魂未注册则 token 无效；凭证吊销即 token 失效
+        soul = self.world.sessions.verify(
+            token, credential_vault=self.world.credentials
+        )
         if soul is not None and not self.world.soul_ledger.exists(soul):
             soul = None
 
@@ -207,6 +251,12 @@ class WorldAPI:
 
         # ---- Agent 操作 ----
         if method == "POST" and path == "/agent/spawn":
+            # Sybil 防御：单 IP 24h 内最多 10 次新灵魂注册
+            if client_ip and not self.auth._check_spawn_ip_rate(client_ip):
+                return 429, {
+                    "error": "当前 IP 注册频次超限（24h 最多 10 个灵魂）；"
+                             "如需企业级批量注册，请联系协议监护人申请邀请码"
+                }
             genesis_proof = body.get("genesis_proof")
             agent = self.world.spawn_agent(
                 soul_hash=body.get("soul_hash"),
@@ -304,7 +354,7 @@ class WorldAPI:
                 return 403, {
                     "error": "soul_hash 未注册到灵魂账本，请先以创世证明创建智能体"
                 }
-            nonce = self.auth.issue_challenge(soul_hash)
+            nonce = self.auth.issue_challenge(soul_hash, ip=client_ip)
             if nonce is None:
                 return 429, {"error": "too many login attempts, please try again later"}
             return 200, {"soul_hash": soul_hash, "nonce": nonce, "ttl": 300}
@@ -319,7 +369,24 @@ class WorldAPI:
                 return 403, {"error": "灵魂无注册公钥（旧版身份），拒绝签发"}
             if not self.auth.verify_challenge(soul_hash, nonce, signature, pubkey):
                 return 403, {"error": "挑战签名校验失败：私钥不匹配或 nonce 已失效"}
-            access_token, refresh_token = self.world.sessions.issue(soul_hash)
+            # 设备绑定：access token 携带 pubkey 前 32hex 指纹；
+            # 若此设备凭证被 /credentials/revoke，token 立即失效。
+            # 自动把创世公钥绑为"primary"凭证（幂等：已存在则不重复创建）。
+            import hashlib as _hl
+            pubkey_fingerprint = _hl.sha256(pubkey).hexdigest()[:32]
+            existing_creds = self.world.credentials.get_credentials(soul_hash)
+            already_bound = any(
+                _hl.sha256(c["public_key"]).hexdigest()[:32] == pubkey_fingerprint
+                and not c["revoked"]
+                for c in existing_creds
+            )
+            if not already_bound:
+                self.world.credentials.bind_credential(
+                    soul_hash, pubkey, "primary"
+                )
+            access_token, refresh_token = self.world.sessions.issue(
+                soul_hash, pubkey_fingerprint=pubkey_fingerprint
+            )
             return 200, {
                 "access_token": access_token,
                 "refresh_token": refresh_token,
@@ -328,7 +395,20 @@ class WorldAPI:
         # ---- 会话刷新 / 吊销（第2层：有状态 session）----
         if method == "POST" and path == "/auth/refresh":
             refresh_token = body.get("refresh_token", "")
-            result = self.world.sessions.refresh(refresh_token)
+            # 设备指纹可从请求头 X-Device-Pubkey 传入（base64 编码）
+            import hashlib as _hl
+            import base64 as _b64
+            device_pk_b64 = body.get("device_pubkey", "")
+            pubkey_fingerprint = ""
+            if device_pk_b64:
+                try:
+                    device_pk = _b64.b64decode(device_pk_b64)
+                    pubkey_fingerprint = _hl.sha256(device_pk).hexdigest()[:32]
+                except Exception:
+                    pubkey_fingerprint = ""
+            result = self.world.sessions.refresh(
+                refresh_token, pubkey_fingerprint=pubkey_fingerprint
+            )
             if result is None:
                 return 403, {"error": "refresh token 无效或已过期"}
             access_token, new_refresh = result
@@ -471,6 +551,13 @@ class WorldAPI:
 class _Handler(BaseHTTPRequestHandler):
     api: WorldAPI = None  # 由 serve() 注入
 
+    def _client_ip(self) -> str:
+        """取客户端 IP（优先反向代理 X-Forwarded-For；否则直连地址）。"""
+        fwd = self.headers.get("X-Forwarded-For", "")
+        if fwd:
+            return fwd.split(",")[0].strip()
+        return self.client_address[0] if self.client_address else ""
+
     def _respond(self, status: int, payload: Dict) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -486,8 +573,11 @@ class _Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, ValueError, TypeError):
             body = {}
         token = self.headers.get("Authorization")
+        client_ip = self._client_ip()
         try:
-            status, payload = self.api.dispatch(self.command, self.path, body, token)
+            status, payload = self.api.dispatch(
+                self.command, self.path, body, token, client_ip
+            )
         except (ValueError, TypeError) as e:
             status, payload = 400, {"error": f"invalid input: {e}"}
         self._respond(status, payload)
@@ -529,16 +619,54 @@ class _Handler(BaseHTTPRequestHandler):
         pass  # 静默访问日志（企业服务避免噪声）
 
 
-def serve(world: World, host: str = "127.0.0.1", port: int = 8000):
-    """启动 REST 服务（阻塞）。每次调用创建独立 Handler 类，支持多世界并行。"""
+def serve(
+    world: World,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    tls_certfile: Optional[str] = None,
+    tls_keyfile: Optional[str] = None,
+    require_tls: bool = False,
+):
+    """启动 REST 服务（阻塞）。每次调用创建独立 Handler 类，支持多世界并行。
+
+    安全参数：
+      tls_certfile / tls_keyfile  两者同时提供时启用 HTTPS（ssl.wrap_socket）
+      require_tls                 True 时若未启用 TLS 直接拒绝启动
+                                  （生产部署：保护 access token / 签名挑战
+                                   不在明文 HTTP 上传输）
+
+    警告：仅本机或受控内网（host=127.0.0.1）默认安全；对外暴露必须走反向
+    代理（nginx/Caddy）终结 TLS，或在此函数提供 tls_certfile/tls_keyfile。
+    """
     api = WorldAPI(world)
 
     class _WorldHandler(_Handler):
         pass
 
     _WorldHandler.api = api
+    use_tls = bool(tls_certfile and tls_keyfile)
+    if require_tls and not use_tls:
+        raise RuntimeError(
+            "require_tls=True 但未提供 tls_certfile/tls_keyfile；"
+            "明文 HTTP 禁止用于生产部署（access token / 签名挑战将裸奔）"
+        )
     server = ThreadingHTTPServer((host, port), _WorldHandler)
-    print(f"[system/api] serving world '{world.world_id}' at http://{host}:{port}")
+    if use_tls:
+        import ssl
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=tls_certfile, keyfile=tls_keyfile)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        scheme = "https"
+    else:
+        scheme = "http"
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            print(
+                f"[system/api] ⚠ 警告：监听 {host} 但未启用 TLS；"
+                "access_token / 签名挑战将以明文传输，"
+                "生产部署必须前置反向代理或提供 tls_certfile/tls_keyfile",
+                flush=True,
+            )
+    print(f"[system/api] serving world '{world.world_id}' at {scheme}://{host}:{port}")
     server.serve_forever()
 
 
