@@ -40,7 +40,9 @@ git clone https://github.com/nohn3043-arch/Second-Reality.git
 
 cd Second-Reality
 
-# 纯 Python ≥3.8——仅标准库，无需安装
+# Python ≥3.8；核心 runtime 仅需 cryptography（Ed25519 签名）
+# pip install cryptography   # GUI 演示另需 pygame
+# 无 GPU 依赖、无数据库服务依赖——任意硬件可运行（见「硬件要求与部署拓扑」）
 # 启动 GUI 演示（需要图形环境；内置两个智能体）
 python virtual_world.py
 ```
@@ -71,7 +73,7 @@ run_headless(200, verbose=True)  # 无头仿真 200 tick；有图形环境可用
 
 ### system 模块详细说明
 
-`system/` 是整套栈的可运行实现载体，采用渐进式 “桩转实” 策略落地所有宪法契约，零第三方依赖，生产级安全。
+`system/` 是整套栈的可运行实现载体，采用渐进式 “桩转实” 策略落地所有宪法契约。核心 runtime 仅依赖 `cryptography`（Ed25519 签名）；无数据库服务依赖、无 GPU 依赖——存储后端（SQLite / Memory / Redis / PG）与密钥后端（文件 / 云 KMS）均可插拔。
 
 | 模块 | 定位 | 核心能力 | 持久化 |
 |---|---|---|---|
@@ -107,11 +109,25 @@ STORAGE=redis REDIS_URL=redis://cache:6379/0 python -m system.api   # 生产示�
 配套的部署级抽象：`ShardRouter`（按 `soul_hash` 分片路由，默认 `SingleShardRouter` 单分片）、`SessionStore`（会话状态可外置）、`CloudKmsProvider`（云 KMS 信封加密，未注入云客户端时自动降级文件后端）。多数据中心部署只需按 soul 分片把单元铺开，代码不变。
 
 **核心特性：**
-1. 零额外依赖：全部使用 Python 标准库实现，无需安装第三方包（`redis` 后端除外）
+1. 低依赖：核心 runtime 仅需 `cryptography`（Ed25519 签名）；GUI 演示需 `pygame`；`redis` 后端可选装。无数据库服务依赖、无 GPU 依赖——存储与密钥后端全部可插拔
 2. 全链路可审计：所有操作均可追溯、可验证，完全符合第二视角审计引擎的 19 维合规要求
 3. 多实现互认：提供机器可读协议标准，支持第三方企业自研实现并网
 4. 生产级安全：账户系统六层架构（身份根 / 凭证 / 会话 / 授权 / 恢复 / 审计），Shamir 分片托管、KMS 密钥托管、有状态可撤销会话、社交恢复机制
 5. 可水平扩展：存储后端可插拔（SQLite / Memory / Redis / PG），分片路由接口就绪，状态可外置——多数据中心部署只是配置，不改代码
+
+**硬件要求与部署拓扑**
+
+负载为纯 CPU 逻辑推演（需求状态机 + SHA-256 哈希链 + Ed25519 签名），无矩阵运算、无本地 LLM 推理、无 GPU 依赖。因此硬件门槛极低，支持任何硬件配置——从树莓派到多数据中心集群，差异只在部署拓扑，不在代码。
+
+| 档位 | 场景 | 参考硬件 | 存储后端 |
+|---|---|---|---|
+| 最低 | 单世界演示 / smoke_test / 审计留痕 | 1 核 CPU · 256MB–1GB 内存 · 数十 MB 磁盘 | `memory` / `sqlite` |
+| 常规 | 百级智能体 + 完整 19 项审计 | 2–4 核 · 2–4GB · SSD | `sqlite` |
+| 规模 | 千级智能体 / 生产多实例 | 4–8 核 · 8–16GB · SSD · Redis | `redis` / `postgres` |
+
+- 算力瓶颈不在 CPU：单智能体决策为常数时间（需求阈值映射），世界 tick 复杂度 O(N)（N = 智能体数）。规模增长的主要开销是账本与记忆的存储 I/O 与磁盘增长，而非算力。
+- 多实例横向扩展：`STORAGE=redis` 外置会话 + `ShardRouter` 按 `soul_hash` 分片，多数据中心部署只是配置，不改代码。
+- 唯一会引入外部算力的路径是接入 LLM 增强（走外部 API，本地仅需网络）；本地核心仍保持低配置。
 
 演示运行时（`virtual_world.py`）以 `EconomySystem`、`TaskGenerator`、`NohnAgent` 装配以上各层，挂载在真实 `system.World` 上。
 
