@@ -10,15 +10,15 @@
 </p>
 
 <p align="center">
-  <em>虚拟世界与元宇宙基础设施基座</em>
+  <em>Virtual World & Metaverse Infrastructure Base</em>
 </p>
 
 <div style="max-width: 1100px; margin: 0 auto; padding: 0 16px; font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; color: #2b2b2b; line-height: 1.8;">
 
-## ✦ 关于
+## ✦ About
 
 <p style="font-size: 16px; line-height: 1.9; color: #2F2F2F; margin: 0 0 24px;">
-  <strong>SPL-VIRTUAL-WORLD-BASE</strong> 是虚拟世界与元宇宙的基础设施框架，基于「宪法 — 法律 — 桥梁」三层架构，为虚拟空间提供可治理、可互操作、可演进的运行时基座，实现跨世界的资产、规则与智能体稳定衔接与协作。第二视角认知审计官作为整套栈的中立裁判。
+  <strong>SPL-VIRTUAL-WORLD-BASE</strong> is an infrastructure framework for virtual worlds and the metaverse, built on a three-layer architecture of "Constitution — Law — Bridge." It provides a governable, interoperable, and evolvable runtime base for virtual spaces, enabling stable alignment of assets, rules, and agents across worlds. The Second Perspective Cognitive Auditor serves as the neutral referee of the entire stack.
 </p>
 
 <div align="center">
@@ -29,194 +29,194 @@
 
 <p align="center">— ✦ —</p>
 
-## ✦ 快速开始
+## ✦ Quick Start
 
 ```bash
-# 主源：GitHub（仓库名 Second-Reality）
+# Primary source: GitHub (repository: Second-Reality)
 git clone https://github.com/nohn3043-arch/Second-Reality.git
 
-# 镜像：Gitee（本仓库）
+# Mirror: Gitee
 # git clone https://gitee.com/nohn-ecosystem/SPL-virtual-world-core.git
 
 cd Second-Reality
 
-# Python ≥3.8；核心 runtime 仅需 cryptography（Ed25519 签名）
-# pip install cryptography   # GUI 演示另需 pygame
-# 无 GPU 依赖、无数据库服务依赖——任意硬件可运行（见「硬件要求与部署拓扑」）
-# 启动 GUI 演示（需要图形环境；内置两个智能体）
+# Python ≥3.8; core runtime requires only cryptography (Ed25519 signing)
+# pip install cryptography   # GUI demo additionally requires pygame
+# No GPU dependency, no database service dependency — runs on any hardware (see "Hardware Requirements & Deployment Topology")
+# Launch GUI demo (requires a graphical environment; two built-in agents)
 python virtual_world.py
 ```
 
-### 编程方式启动
+### Programmatic Launch
 
 ```python
 from virtual_world import NohnWorld, run_gui, run_headless
 
-nexus = NohnWorld()          # 内置初始资源与两个智能体
-nexus.spawn_agent()          # 可选：再追加一个智能体
-run_headless(200, verbose=True)  # 无头仿真 200 tick；有图形环境可用 run_gui()
+nexus = NohnWorld()          # Built-in initial resources and two agents
+nexus.spawn_agent()          # Optional: spawn an additional agent
+run_headless(200, verbose=True)  # Headless simulation 200 ticks; use run_gui() if graphical env available
 ```
 
 <p align="center">— ✦ —</p>
 
-## ✦ 架构设计
+## ✦ Architecture
 
 <div style="max-width: 1100px; margin: 0 auto; padding: 0 16px; font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; color: #2b2b2b; line-height: 1.8;">
 
-整套栈分为四个可分离层次，使规则（只读）、审计官（中立裁判）、系统（实现）与演示客户端互不混淆：
+The stack is divided into four separable layers, ensuring that rules (read-only), the auditor (neutral referee), the system (implementation), and the demo client never conflate:
 
-- <strong>宪法规则</strong>（`constitution_rules.py`）：原初公理与十条治理律法，永久锁定为根信任锚。`NOHN_LAW_AXIOMS` 是所有常量的唯一权威来源。
-- <strong>审计引擎</strong>（`audit_engine.py`）：第二视角认知审计官（`ResponsibilityAccount` + 可插拔 `AuditPlugin` + `SecondPerspectiveAuditor`，含 19 维合规审查，含鉴权安全维度）。它是裁判，不是世界的一部分。
-- <strong>法律</strong>（`law/`）：四个标准层：通信协议标准 · 全球经济统一标准（货币、锚定、储备证明、赎回）· 身份证明标准（灵魂哈希绑定身份，含 V2.2 凭证可恢复条款）· 物理基线标准（重力 / 时间 / 尺度常数）。
-- <strong>系统</strong>（`system/`）：真实实现层：持久化账本、≥2/3 公投共识、智能体引擎、无头运行时、REST/WS API、机器可读协议模式、账户系统六层架构（身份根 / 凭证 / 会话 / 授权 / 恢复 / 审计）。所有暴露状态必须通过第二视角审计官的 19 项合规审查。
-- <strong>桥梁</strong>（`compatibility_bridge.py`）：遗留世界加入 Nohn 领地的唯一「海关」：`translate_intent()` 语义清洗（去隐式解释权）、`check_physics_constants()` 物理常数校验、`verify_soul_hash()` 灵魂哈希身份核验。
+- <strong>Constitution Rules</strong> (`constitution_rules.py`): Original axioms and ten governance laws, permanently locked as the root trust anchor. `NOHN_LAW_AXIOMS` is the single authoritative source for all constants.
+- <strong>Audit Engine</strong> (`audit_engine.py`): Second Perspective Cognitive Auditor (`ResponsibilityAccount` + pluggable `AuditPlugin` + `SecondPerspectiveAuditor`, with 19-dimension compliance review including authentication security). It is the referee, not part of the world.
+- <strong>Law</strong> (`law/`): Four standard layers: Communication Protocol Standard · Unified Global Economic Standard (currency, pegging, reserve proof, redemption) · Identity Proof Standard (soul hash bound identity, with V2.2 credential recovery clause) · Physics Baseline Standard (gravity / time / scale constants).
+- <strong>System</strong> (`system/`): Real implementation layer: persistent ledger, ≥2/3 referendum consensus, agent engine, headless runtime, REST/WS API, machine-readable protocol schema, six-layer account system (identity root / credentials / session / authorization / recovery / audit). All exposed state must pass the Second Perspective Auditor's 19-dimension compliance review.
+- <strong>Bridge</strong> (`compatibility_bridge.py`): The sole "customs checkpoint" for legacy worlds entering Nohn territory: `translate_intent()` semantic cleansing (removes implicit interpretation rights), `check_physics_constants()` physics constant verification, `verify_soul_hash()` soul hash identity verification.
 
-### system 模块详细说明
+### System Module Details
 
-`system/` 是整套栈的可运行实现载体，采用渐进式 “桩转实” 策略落地所有宪法契约。核心 runtime 仅依赖 `cryptography`（Ed25519 签名）；无数据库服务依赖、无 GPU 依赖——存储后端（SQLite / Memory / Redis / PG）与密钥后端（文件 / 云 KMS）均可插拔。
+`system/` is the runnable implementation carrier for the entire stack, adopting a progressive "stub-to-real" strategy to realize all constitutional contracts. The core runtime depends only on `cryptography` (Ed25519 signing); no database service dependency, no GPU dependency — storage backends (SQLite / Memory / Redis / PG) and key backends (file / cloud KMS) are all pluggable.
 
-| 模块 | 定位 | 核心能力 | 持久化 |
+| Module | Role | Core Capabilities | Persistence |
 |---|---|---|---|
-| `__init__.py` | 模块入口 | 定义 system 层整体边界、约束与模块规划 | - |
-| `ledger.py` | 状态账本 | 灵魂哈希确权（惰性加载 + 分页）、世界历史哈希链、储备证明账本、世界快照 | SQLite（默认 `.world_data/` 目录） |
-| `consensus.py` | 共识网络 | 节点注册（真实签名验签）、提案公投（≥2/3 超多数通过）、去中心化治理、创世引导期豁免 | 复用 ledger 存储 |
-| `agent_engine.py` | 智能体引擎 | 需求驱动智能体决策、记忆封存/校验（KMS 密钥）、记忆不可侵占保障、状态持久化 | 复用 ledger 存储 |
-| `runtime.py` | 无头运行时 | 世界创世装配、tick 主循环、因果链记录、快照持久化、19 项审计上报 | 复用 ledger 存储 |
-| `protocol.py` | 互认协议 | 四份法律标准机器可读化 JSON Schema、第三方实现并网校验 | - |
-| `api.py` | 服务接口 | REST 服务、有状态会话鉴权（可撤销）、账户系统路由、并发锁 + 速率限制 | 会话状态持久化 |
-| `keys.py` | 密钥管理 | Ed25519 密钥、Shamir 分片、KMS 抽象（文件 / 云 KMS 可插拔）、签名密钥加载 | 密钥文件落盘 / 云 KMS 托管 |
-| `identity_root.py` | 身份根（第 0 层） | 主身份密钥对 + Shamir(3,5) 分片托管，明文主私钥生成后立即清除 | - |
-| `credentials.py` | 凭证层（第 1 层） | 一个灵魂绑定多设备凭证（服务端只存公钥），绑定 / 吊销 / 验签 | SQLite |
-| `session.py` | 认证层（第 2 层） | 有状态会话：access token(15min) + refresh token(可轮换可撤销)；会话存储可插拔（SQLite / Memory / Redis） | SessionStore 可插拔 |
-| `authorization.py` | 授权层（第 3 层） | 分级授权（小额即时 / 中额延迟 / 大额多签 / 超大额人工）+ 风险评分 | - |
-| `recovery.py` | 恢复层（第 4 层） | 社交恢复（3/5 守护者投票）+ 时间锁（7 天可取消） | SQLite |
+| `__init__.py` | Module entry | Defines system layer boundaries, constraints, and module planning | - |
+| `ledger.py` | State ledger | Soul hash attestation (lazy loading + pagination), world history hash chain, reserve proof ledger, world snapshots | SQLite (default `.world_data/` directory) |
+| `consensus.py` | Consensus network | Node registration (real signature verification), proposal referendum (≥2/3 supermajority), decentralized governance, genesis bootstrap exemption | Reuses ledger storage |
+| `agent_engine.py` | Agent engine | Need-driven agent decision-making, memory sealing/verification (KMS key), memory inalienability guarantee, state persistence | Reuses ledger storage |
+| `runtime.py` | Headless runtime | World genesis assembly, tick main loop, causal chain recording, snapshot persistence, 19-dimension audit reporting | Reuses ledger storage |
+| `protocol.py` | Interoperability protocol | Four legal standards as machine-readable JSON Schema, third-party implementation onboarding verification | - |
+| `api.py` | Service interface | REST service, stateful session authentication (revocable), account system routing, concurrency locks + rate limiting | Session state persisted |
+| `keys.py` | Key management | Ed25519 keys, Shamir secret sharing, KMS abstraction (file / cloud KMS pluggable), signing key loading | Key files on disk / cloud KMS托管 |
+| `identity_root.py` | Identity root (Layer 0) | Master identity keypair + Shamir(3,5) secret sharing, plaintext master private key generated then immediately cleared | - |
+| `credentials.py` | Credential layer (Layer 1) | One soul-bound multi-device credential (server stores only public keys), bind / revoke / verify | SQLite |
+| `session.py` | Authentication layer (Layer 2) | Stateful session: access token (15min) + refresh token (rotatable, revocable); session storage pluggable (SQLite / Memory / Redis) | SessionStore pluggable |
+| `authorization.py` | Authorization layer (Layer 3) | Tiered authorization (micro-instant / medium-delayed / large-multisig / extra-large-manual) + risk scoring | - |
+| `recovery.py` | Recovery layer (Layer 4) | Social recovery (3/5 guardian vote) + time lock (7-day cancellable) | SQLite |
 
-**多后端部署（同一份代码，三套后端）**
+**Multi-Backend Deployment (same codebase, three backends)**
 
-运行前用环境变量 `STORAGE` 选择存储后端，默认 `sqlite`：
+Select storage backend via `STORAGE` environment variable before running; default `sqlite`:
 
-| STORAGE | 账本（ledger） | 会话（session） | 适用 |
+| STORAGE | Ledger | Session | Use Case |
 |---|---|---|---|
-| `sqlite`（默认） | 落盘 SQLite（`.world_data/`） | 与账本同库 | 单机 / 演示 |
-| `memory` | 进程内 `:memory:`（不落盘） | 内存 dict | 测试 / 无状态演示 |
-| `redis` | 本地 SQLite | Redis（需 `pip install redis`，缺省降级 SQLite） | 生产横向扩展，多实例共享会话 |
-| `postgres` | 预留 PG 驱动（当前降级 SQLite） | SQLite | 生产大规模账本 |
+| `sqlite` (default) | On-disk SQLite (`.world_data/`) | Same database as ledger | Single machine / demo |
+| `memory` | In-process `:memory:` (no disk) | In-memory dict | Testing / stateless demo |
+| `redis` | Local SQLite | Redis (requires `pip install redis`, falls back to SQLite if absent) | Production horizontal scaling, multi-instance shared sessions |
+| `postgres` | Reserved PG driver (currently falls back to SQLite) | SQLite | Production large-scale ledger |
 
 ```bash
-STORAGE=redis REDIS_URL=redis://cache:6379/0 python -m system.api   # 生产示例
+STORAGE=redis REDIS_URL=redis://cache:6379/0 python -m system.api   # Production example
 ```
 
-配套的部署级抽象：`ShardRouter`（按 `soul_hash` 分片路由，默认 `SingleShardRouter` 单分片）、`SessionStore`（会话状态可外置）、`CloudKmsProvider`（云 KMS 信封加密，未注入云客户端时自动降级文件后端）。多数据中心部署只需按 soul 分片把单元铺开，代码不变。
+Supporting deployment-level abstractions: `ShardRouter` (shard routing by `soul_hash`, default `SingleShardRouter` single shard), `SessionStore` (externalized session state), `CloudKmsProvider` (cloud KMS envelope encryption, auto-falls back to file backend when no cloud client injected). Multi-datacenter deployment simply lays out units by soul shard — no code changes required.
 
-**核心特性：**
-1. 低依赖：核心 runtime 仅需 `cryptography`（Ed25519 签名）；GUI 演示需 `pygame`；`redis` 后端可选装。无数据库服务依赖、无 GPU 依赖——存储与密钥后端全部可插拔
-2. 全链路可审计：所有操作均可追溯、可验证，完全符合第二视角审计引擎的 19 维合规要求
-3. 多实现互认：提供机器可读协议标准，支持第三方企业自研实现并网
-4. 生产级安全：账户系统六层架构（身份根 / 凭证 / 会话 / 授权 / 恢复 / 审计），Shamir 分片托管、KMS 密钥托管、有状态可撤销会话、社交恢复机制
-5. 可水平扩展：存储后端可插拔（SQLite / Memory / Redis / PG），分片路由接口就绪，状态可外置——多数据中心部署只是配置，不改代码
+**Core Features:**
+1. Low dependencies: Core runtime requires only `cryptography` (Ed25519 signing); GUI demo requires `pygame`; `redis` backend optional. No database service dependency, no GPU dependency — all storage and key backends are pluggable
+2. Full-chain auditability: All operations are traceable and verifiable, fully compliant with the Second Perspective Audit Engine's 19-dimension requirements
+3. Multi-implementation inter-recognition: Provides machine-readable protocol standards, supports third-party enterprises building self-developed implementations for network onboarding
+4. Production-grade security: Six-layer account system (identity root / credentials / session / authorization / recovery / audit), Shamir secret sharing, KMS key escrow, stateful revocable sessions, social recovery
+5. Horizontal scalability: Pluggable storage backends (SQLite / Memory / Redis / PG), shard routing interface ready, externalizable state — multi-datacenter deployment is configuration, not code changes
 
-**硬件要求与部署拓扑**
+**Hardware Requirements & Deployment Topology**
 
-负载为纯 CPU 逻辑推演（需求状态机 + SHA-256 哈希链 + Ed25519 签名），无矩阵运算、无本地 LLM 推理、无 GPU 依赖。因此硬件门槛极低，支持任何硬件配置——从树莓派到多数据中心集群，差异只在部署拓扑，不在代码。
+Workload is pure CPU logical simulation (need state machine + SHA-256 hash chain + Ed25519 signing), with no matrix operations, no local LLM inference, no GPU dependency. Hardware threshold is extremely low — runs on anything from a Raspberry Pi to a multi-datacenter cluster; the difference is deployment topology, not code.
 
-| 档位 | 场景 | 参考硬件 | 存储后端 |
+| Tier | Scenario | Reference Hardware | Storage Backend |
 |---|---|---|---|
-| 最低 | 单世界演示 / smoke_test / 审计留痕 | 1 核 CPU · 256MB–1GB 内存 · 数十 MB 磁盘 | `memory` / `sqlite` |
-| 常规 | 百级智能体 + 完整 19 项审计 | 2–4 核 · 2–4GB · SSD | `sqlite` |
-| 规模 | 千级智能体 / 生产多实例 | 4–8 核 · 8–16GB · SSD · Redis | `redis` / `postgres` |
+| Minimum | Single-world demo / smoke_test / audit trail | 1 CPU core · 256MB–1GB RAM · tens of MB disk | `memory` / `sqlite` |
+| Standard | Hundred-level agents + full 19-dimension audit | 2–4 cores · 2–4GB · SSD | `sqlite` |
+| Scale | Thousand-level agents / production multi-instance | 4–8 cores · 8–16GB · SSD · Redis | `redis` / `postgres` |
 
-- 算力瓶颈不在 CPU：单智能体决策为常数时间（需求阈值映射），世界 tick 复杂度 O(N)（N = 智能体数）。规模增长的主要开销是账本与记忆的存储 I/O 与磁盘增长，而非算力。
-- 多实例横向扩展：`STORAGE=redis` 外置会话 + `ShardRouter` 按 `soul_hash` 分片，多数据中心部署只是配置，不改代码。
-- 唯一会引入外部算力的路径是接入 LLM 增强（走外部 API，本地仅需网络）；本地核心仍保持低配置。
+- Compute bottleneck is not CPU: Single agent decision is constant time (need threshold mapping), world tick complexity is O(N) (N = agent count). The primary cost of scale growth is ledger and memory storage I/O and disk growth, not compute.
+- Multi-instance horizontal scaling: `STORAGE=redis` externalized sessions + `ShardRouter` sharding by `soul_hash` — multi-datacenter deployment is configuration, not code changes.
+- The only path that introduces external compute is LLM augmentation (via external API, local requires only network); the local core remains low-configuration.
 
-演示运行时（`virtual_world.py`）以 `EconomySystem`、`TaskGenerator`、`NohnAgent` 装配以上各层，挂载在真实 `system.World` 上。
+The demo runtime (`virtual_world.py`) assembles the above layers with `EconomySystem`, `TaskGenerator`, `NohnAgent`, mounted on the real `system.World`.
 
 </div>
 
 <p align="center">— ✦ —</p>
 
-## ✦ 核心模块
+## ✦ Core Modules
 
 <div style="max-width: 1100px; margin: 0 auto; padding: 0 16px;">
 
-按 Nohn™ 世界栈的六个层次分组（全部类均与当前源码核对）：
+Grouped by the six layers of the Nohn™ World Stack (all classes verified against current source code):
 
-| 层次 | 模块（类） | 职责 |
+| Layer | Module (Class) | Responsibility |
 |---|---|---|
-| **宪法** | `SpatialSubstrate` | 世界拓扑、维度、边界、最小单元 |
-|  | `TemporalSubstrate` | 时间流与事件排序 |
-|  | `CausalClosure` | 因果链追踪、外部干预检测 |
-|  | `ExistenceAxiom` | 实体创建、校验与销毁 |
-|  | `GenesisCondition` | 世界初始化与完整性校验 |
-|  | `ImmutableWorldRule` | 需全球公投方可修改的规则 |
-|  | `WorldCentralBrain` | 世界子系统的中央协调 |
-| **灵魂** | `SoulAttestation` | 灵魂注册与核验 |
-|  | `SoulLedger` | 身份账本 |
-|  | `MemoryInalienability` | 记忆不可侵占 |
-|  | `MemoryGuardian` | 记忆封印与篡改检测 |
-|  | `IndependentWill` | 自主意志（MARL 基，非行为树） |
-|  | `MemoryVault` | 安全记忆存储 |
-| **审计** | `ResponsibilityAccount` | 每个治理行为的具名问责 |
-|  | `AuditPlugin` | 可插拔审计检查 |
-|  | `CognitiveAuditEngine` | 认知审计引擎核心 |
-|  | `SecondPerspectiveAuditor` | 综合合规审查 |
-|  | `DecentralizationGovernance` | 去中心化治理 |
-|  | `AestheticCompliance` | 美学 / 渲染合规 |
-|  | `AuditReport` | 结构化审计报告 |
-| **永续** | `WorldPerpetuity` | 永恒世界运行记录 |
-|  | `HistoryLedger` | 历史账本 |
-|  | `SnapshotRegistry` | 快照注册与恢复 |
-| **互操作** | `NohnCompatibilityBridge` | 跨世界桥接协议 |
-|  | `MandatoryInteroperability` | 强制互操作协议 |
-|  | `UniversalVocabulary` | 通用语义词汇表 |
-|  | `PhysicsBaseline` | 物理基线对齐 |
-|  | `IdentityProtocol` | 身份协议兼容 |
-|  | `EconomicBaseline` | 经济标准合规 |
-| **运行时** | `NohnWorld` | 世界容器 |
-|  | `NohnAgent` | 智能体 |
-|  | `EconomySystem` | 经济系统 |
-|  | `TaskGenerator` | 任务生成 |
-|  | `NohnVisualApp` | 可视化应用 |
-|  | `ConsensusEngine` | 世界参与者共识 |
-|  | `SimulationEngine` | 世界仿真循环 |
-| **系统** | `World`（`system/runtime.py`） | 创世装配 + 滴答循环 + 19 维审计 + 快照 + 账户系统六层装配 |
-|  | `Storage` · `SoulLedger` · `HistoryLedger` · `EconomicReserve` · `SnapshotRegistry`（`system/ledger.py`） | 持久化 SQLite 账本（灵魂 / 历史 / 经济 / 快照 / 凭证 / 会话 / 恢复） |
-|  | `ConsensusNetwork` · `Governance`（`system/consensus.py`） | ≥2/3 公投共识 + 治理 + 创世引导期豁免 |
-|  | `Agent`（`system/agent_engine.py`） | 需求驱动智能体 + 记忆封印 + 状态持久化 |
-|  | `IdentityRoot`（`system/identity_root.py`） | 身份根 + Shamir 分片托管 |
-|  | `CredentialVault`（`system/credentials.py`） | 多设备凭证管理 |
-|  | `SessionManager`（`system/session.py`） | 有状态可撤销会话 |
-|  | `AuthorizationEngine`（`system/authorization.py`） | 分级授权 + 风险引擎 |
-|  | `RecoveryManager`（`system/recovery.py`） | 社交恢复 + 时间锁 |
-|  | `ProtocolValidator`（`system/protocol.py`） | 机器可读法律校验 + 入网 |
-|  | `SoulAuth` · `WorldAPI`（`system/api.py`） | REST + 有状态会话鉴权 + 账户系统路由 |
+| **Constitution** | `SpatialSubstrate` | World topology, dimensions, boundaries, minimal units |
+|  | `TemporalSubstrate` | Time flow and event ordering |
+|  | `CausalClosure` | Causal chain tracking, external intervention detection |
+|  | `ExistenceAxiom` | Entity creation, verification, and destruction |
+|  | `GenesisCondition` | World initialization and integrity verification |
+|  | `ImmutableWorldRule` | Rules modifiable only via global referendum |
+|  | `WorldCentralBrain` | Central coordination of world subsystems |
+| **Soul** | `SoulAttestation` | Soul registration and verification |
+|  | `SoulLedger` | Identity ledger |
+|  | `MemoryInalienability` | Memory inalienability |
+|  | `MemoryGuardian` | Memory sealing and tamper detection |
+|  | `IndependentWill` | Autonomous will (MARL-based, not behavior tree) |
+|  | `MemoryVault` | Secure memory storage |
+| **Audit** | `ResponsibilityAccount` | Named accountability for each governance action |
+|  | `AuditPlugin` | Pluggable audit checks |
+|  | `CognitiveAuditEngine` | Cognitive audit engine core |
+|  | `SecondPerspectiveAuditor` | Comprehensive compliance review |
+|  | `DecentralizationGovernance` | Decentralized governance |
+|  | `AestheticCompliance` | Aesthetic / rendering compliance |
+|  | `AuditReport` | Structured audit reports |
+| **Perpetuity** | `WorldPerpetuity` | Eternal world runtime records |
+|  | `HistoryLedger` | History ledger |
+|  | `SnapshotRegistry` | Snapshot registration and recovery |
+| **Interoperability** | `NohnCompatibilityBridge` | Cross-world bridging protocol |
+|  | `MandatoryInteroperability` | Mandatory interoperability protocol |
+|  | `UniversalVocabulary` | Universal semantic vocabulary |
+|  | `PhysicsBaseline` | Physics baseline alignment |
+|  | `IdentityProtocol` | Identity protocol compatibility |
+|  | `EconomicBaseline` | Economic standard compliance |
+| **Runtime** | `NohnWorld` | World container |
+|  | `NohnAgent` | Agent |
+|  | `EconomySystem` | Economic system |
+|  | `TaskGenerator` | Task generation |
+|  | `NohnVisualApp` | Visualization application |
+|  | `ConsensusEngine` | World participant consensus |
+|  | `SimulationEngine` | World simulation loop |
+| **System** | `World` (`system/runtime.py`) | Genesis assembly + tick loop + 19-dimension audit + snapshots + account system six-layer assembly |
+|  | `Storage` · `SoulLedger` · `HistoryLedger` · `EconomicReserve` · `SnapshotRegistry` (`system/ledger.py`) | Persistent SQLite ledger (soul / history / economy / snapshot / credentials / session / recovery) |
+|  | `ConsensusNetwork` · `Governance` (`system/consensus.py`) | ≥2/3 referendum consensus + governance + genesis bootstrap exemption |
+|  | `Agent` (`system/agent_engine.py`) | Need-driven agent + memory sealing + state persistence |
+|  | `IdentityRoot` (`system/identity_root.py`) | Identity root + Shamir secret sharing |
+|  | `CredentialVault` (`system/credentials.py`) | Multi-device credential management |
+|  | `SessionManager` (`system/session.py`) | Stateful revocable sessions |
+|  | `AuthorizationEngine` (`system/authorization.py`) | Tiered authorization + risk engine |
+|  | `RecoveryManager` (`system/recovery.py`) | Social recovery + time lock |
+|  | `ProtocolValidator` (`system/protocol.py`) | Machine-readable law validation + network onboarding |
+|  | `SoulAuth` · `WorldAPI` (`system/api.py`) | REST + stateful session authentication + account system routing |
 
 </div>
 
 <p align="center">— ✦ —</p>
 
-## ✦ 企业接入
+## ✦ Enterprise Integration
 
 <div style="max-width: 1100px; margin: 0 auto; padding: 0 16px;">
 
-本基座是 <strong>协议守护者 + 参考实现</strong>，而非单运营方平台。企业可按三种方式接入：
+This base is a <strong>protocol guardian + reference implementation</strong>, not a single-operator platform. Enterprises can integrate in three ways:
 
-### A. 协议参与方（自托管，数据留在本地）
+### A. Protocol Participant (Self-hosted, Data Stays Local)
 
-在自有数据中心运行符合 `law/` 四项标准的自研实现，入网前先校验：
+Run a self-developed implementation compliant with the four `law/` standards in your own data center. Validate before onboarding:
 
 ```python
 from system.protocol import ProtocolValidator
 ok, failures = ProtocolValidator().validate(world_config)
-# ok=True  -> 接入 Nohn 网络
-# ok=False -> 在被判失败层次隔离
+# ok=True  -> Join the Nohn network
+# ok=False -> Isolated at the failed layer
 ```
 
-<strong>硬约束</strong>：原始数据（灵魂、资产、记忆、世界状态）永不离开数据中心。协议层只交换可验证证明——哈希、签名、Merkle 根、储备证明——绝不交换原始数据。
+<strong>Hard constraint</strong>: Raw data (souls, assets, memories, world state) never leaves the data center. The protocol layer only exchanges verifiable proofs — hashes, signatures, Merkle roots, reserve proofs — never raw data.
 
-### B. 参考实现（嵌入式）
+### B. Reference Implementation (Embedded)
 
-直接使用经过审计的参考世界：
+Directly use the audited reference world:
 
 ```python
 from system.runtime import World
@@ -224,62 +224,62 @@ from system.keys import generate_user_keypair, build_genesis_proof
 from system.ledger import derive_soul_hash
 
 world = World("my-world", data_dir="./my_data")
-device = generate_user_keypair()   # 私钥仅驻设备安全区（内存态），永不上传
+device = generate_user_keypair()   # Private key stays in device secure enclave (memory), never uploaded
 genesis_proof = build_genesis_proof(device["secret"], {"genesis_id": "my-first-soul"})
-soul_hash = derive_soul_hash(genesis_proof)   # = SHA-256(公钥)
+soul_hash = derive_soul_hash(genesis_proof)   # = SHA-256(public_key)
 world.spawn_agent(soul_hash=soul_hash, genesis_proof=genesis_proof)
 world.tick()
-print(world.audit_summary())   # 19 维第二视角审计
+print(world.audit_summary())   # 19-dimension Second Perspective audit
 ```
 
-### C. API 集成（REST + WebSocket）
+### C. API Integration (REST + WebSocket)
 
 ```python
 from system.api import serve
 serve(world, host="0.0.0.0", port=8000)
 ```
 
-关键端点：`GET /health`、`GET /world`、`GET /audit`、`POST /protocol/validate`、`POST /agent/spawn`、`POST /auth/issue`、`POST /auth/refresh`、`POST /auth/revoke`、`GET/POST /credentials/*`、`POST /recovery/*`、`GET/POST /economy/*`。
+Key endpoints: `GET /health`, `GET /world`, `GET /audit`, `POST /protocol/validate`, `POST /agent/spawn`, `POST /auth/issue`, `POST /auth/refresh`, `POST /auth/revoke`, `GET/POST /credentials/*`, `POST /recovery/*`, `GET/POST /economy/*`.
 
 </div>
 
 <p align="center">— ✦ —</p>
 
-## ✦ 项目结构
+## ✦ Project Structure
 
 ```text
 Second-Reality/
-├── constitution_rules.py        # 宪法规则：公理 + 十条治理律法 + NOHN_LAW_AXIOMS
-├── audit_engine.py              # 第二视角审计官：19 维合规审查（含鉴权安全）
-├── constitution.py              # 聚合层（向后兼容再导出）
-├── compatibility_bridge.py      # 遗留世界「海关」：语义清洗 + 物理 / 灵魂校验
-├── virtual_world.py             # 演示运行时（GUI / 无头），挂载于 system.World
-├── _build_vw*.py                # 虚拟世界构建脚本系列
-├── _gen*.py                     # 内容生成脚本系列
-├── _write_vw.py                 # 世界写入工具
-├── package.json                 # Node.js 依赖（文档生成工具）
-├── system/                      # 真实实现层
+├── constitution_rules.py        # Constitution rules: axioms + ten governance laws + NOHN_LAW_AXIOMS
+├── audit_engine.py              # Second Perspective Auditor: 19-dimension compliance review (incl. auth security)
+├── constitution.py              # Aggregation layer (backward-compatible re-exports)
+├── compatibility_bridge.py      # Legacy world "customs": semantic cleansing + physics / soul verification
+├── virtual_world.py             # Demo runtime (GUI / headless), mounted on system.World
+├── _build_vw*.py                # Virtual world build script series
+├── _gen*.py                     # Content generation script series
+├── _write_vw.py                 # World writing tool
+├── package.json                 # Node.js dependencies (documentation generation tools)
+├── system/                      # Real implementation layer
 │   ├── __init__.py
-│   ├── ledger.py                #   持久化账本（Soul/History/Economic/凭证/会话/恢复）+ ShardRouter 分片路由 + memory 后端
-│   ├── consensus.py             #   ≥2/3 公投共识 + 治理 + 创世引导期豁免
-│   ├── agent_engine.py          #   需求驱动智能体 + 记忆封印 + 状态持久化
-│   ├── runtime.py               #   创世装配 + 滴答循环 + 19 项审计报告 + 账户系统装配（STORAGE 后端选择）
-│   ├── api.py                   #   REST + 有状态会话鉴权 + 账户系统路由 + 速率限制
-│   ├── protocol.py              #   机器可读法律模式 + 校验器
-│   ├── keys.py                  #   签名密钥管理 + Shamir 分片 + KMS 抽象（文件 / CloudKmsProvider）
-│   ├── identity_root.py         #   身份根（第0层）：主密钥 + Shamir 分片托管
-│   ├── credentials.py           #   凭证层（第1层）：多设备凭证管理
-│   ├── session.py               #   认证层（第2层）：有状态可撤销会话（SessionStore 可插拔）
-│   ├── authorization.py         #   授权层（第3层）：分级授权 + 风险引擎
-│   └── recovery.py              #   恢复层（第4层）：社交恢复 + 时间锁
-├── law/                         # 通信 / 经济 / 身份 / 物理标准
-├── tools/                       # 工具脚本
-│   ├── gen_gcae_doc.js          #   GCAE 文档生成器
-│   ├── md2pdf.py                #   Markdown 转 PDF 工具
-│   └── updated_rules.md         #   规则更新记录
-├── docs/                        # 技术文档
-│   ├── audit_engine_vs_safety_benchmarks.md  # 审计引擎安全基准测试报告
-│   └── audit_engine_vs_safety_benchmarks.pdf # PDF 版报告
+│   ├── ledger.py                #   Persistent ledger (Soul/History/Economic/credentials/session/recovery) + ShardRouter + memory backend
+│   ├── consensus.py             #   ≥2/3 referendum consensus + governance + genesis bootstrap exemption
+│   ├── agent_engine.py          #   Need-driven agent + memory sealing + state persistence
+│   ├── runtime.py               #   Genesis assembly + tick loop + 19-dimension audit + account system assembly (STORAGE backend selection)
+│   ├── api.py                   #   REST + stateful session auth + account system routing + rate limiting
+│   ├── protocol.py              #   Machine-readable law schema + validator
+│   ├── keys.py                  #   Signing key management + Shamir secret sharing + KMS abstraction (file / CloudKmsProvider)
+│   ├── identity_root.py         #   Identity root (Layer 0): master key + Shamir secret sharing
+│   ├── credentials.py           #   Credential layer (Layer 1): multi-device credential management
+│   ├── session.py               #   Authentication layer (Layer 2): stateful revocable session (SessionStore pluggable)
+│   ├── authorization.py         #   Authorization layer (Layer 3): tiered authorization + risk engine
+│   └── recovery.py              #   Recovery layer (Layer 4): social recovery + time lock
+├── law/                         # Communication / Economic / Identity / Physics standards
+├── tools/                       # Tool scripts
+│   ├── gen_gcae_doc.js          #   GCAE document generator
+│   ├── md2pdf.py                #   Markdown to PDF tool
+│   └── updated_rules.md         #   Rules update log
+├── docs/                        # Technical documentation
+│   ├── audit_engine_vs_safety_benchmarks.md  # Audit engine safety benchmark report
+│   └── audit_engine_vs_safety_benchmarks.pdf # PDF version
 ├── assets/                      # banner.svg/png, overview.svg/png
 ├── .gitignore
 ├── LICENSE
@@ -288,30 +288,30 @@ Second-Reality/
 
 <p align="center">— ✦ —</p>
 
-## ✦ 生态
+## ✦ Ecosystem
 
-SPL-VIRTUAL-WORLD-BASE 是 NOHN AI 生态的一员——围绕第二视角因果审计与确定性执行构建的项目家族：
+SPL-VIRTUAL-WORLD-BASE is a member of the NOHN AI ecosystem — a family of projects built around Second Perspective causal audit and deterministic execution:
 
-| 项目 | 仓库 | 定位 |
+| Project | Repository | Role |
 |---|---|---|
-| **Second-Perspective (GCAE)** | [nohn3043-arch/second-perspective](https://github.com/nohn3043-arch/second-perspective) | 全局认知审计引擎——五算子因果审计内核（IMDA 95/100） |
-| **NOMOS** | [nohn3043-arch/second-perspective](https://github.com/nohn3043-arch/second-perspective)（`Intelligent-Decision-Hub--Nomos` 分支） | 可审计确定性决策中心（IMDA 95/100） |
-| **SPL-G1** | [nohn3043-arch/SPL-G1](https://github.com/nohn3043-arch/SPL-G1) | 硬件因果审计可信计算单元（TCU） |
-| **SPL-Virtual-World-Base** | [nohn3043-arch/Second-Reality](https://github.com/nohn3043-arch/Second-Reality) | 虚拟世界与元宇宙基础设施（宪法 / 法律 / 桥梁） |
-| **Story-Engine** | [nohn3043-arch/story-engine](https://github.com/nohn3043-arch/story-engine) | 长篇叙事一致性引擎 |
-| **Antares** | [nohn3043-arch/Antares](https://github.com/nohn3043-arch/Antares) | GFSIP v1.0——带因果审计的联邦稳定互操作协议 |
-| **Anthropomorphic-Agent-Engine** | [nohn3043-arch/Anthropomorphic-Agent-Engine](https://github.com/nohn3043-arch/Anthropomorphic-Agent-Engine) | 确定性拟人心理引擎（SPL Pure Core V8.0） |
-| **PAGES** | [nohn3043-arch/pages](https://github.com/nohn3043-arch/pages) | NOHN AI 生态官方落地页 |
+| **Second-Perspective (GCAE)** | [nohn3043-arch/second-perspective](https://github.com/nohn3043-arch/second-perspective) | Global Cognitive Audit Engine — five-operator causal audit core (IMDA 95/100) |
+| **NOMOS** | [nohn3043-arch/second-perspective](https://github.com/nohn3043-arch/second-perspective) (`Intelligent-Decision-Hub--Nomos` branch) | Auditable deterministic decision center (IMDA 95/100) |
+| **SPL-G1** | [nohn3043-arch/SPL-G1](https://github.com/nohn3043-arch/SPL-G1) | Hardware causal audit trusted computing unit (TCU) |
+| **SPL-Virtual-World-Base** | [nohn3043-arch/Second-Reality](https://github.com/nohn3043-arch/Second-Reality) | Virtual world & metaverse infrastructure (Constitution / Law / Bridge) |
+| **Story-Engine** | [nohn3043-arch/story-engine](https://github.com/nohn3043-arch/story-engine) | Long-form narrative consistency engine |
+| **Antares** | [nohn3043-arch/Antares](https://github.com/nohn3043-arch/Antares) | GFSIP v1.0 — Federated stable interoperability protocol with causal audit |
+| **Anthropomorphic-Agent-Engine** | [nohn3043-arch/Anthropomorphic-Agent-Engine](https://github.com/nohn3043-arch/Anthropomorphic-Agent-Engine) | Deterministic anthropomorphic psychology engine (SPL Pure Core V8.0) |
+| **PAGES** | [nohn3043-arch/pages](https://github.com/nohn3043-arch/pages) | NOHN AI ecosystem official landing page |
 
 <p align="center">— ✦ —</p>
 
-## ✦ 许可与授权
+## ✦ License & Authorization
 
-本仓库<strong>非开源</strong>。双轨模式：个人非商业研究免费；政府 / 企业需付费商业授权。详见 [LICENSE](./LICENSE)。
+This repository is <strong>not open source</strong>. Dual-track model: free for personal non-commercial research; paid commercial license required for government / enterprise use. See [LICENSE](./LICENSE).
 
-<strong>商标声明</strong>：「Nohn™」与「Second Perspective™」是虚拟世界领域的未注册商标，受反不正当竞争法与普通法仿冒原则保护。任何未经授权的商业使用均构成侵权。
+<strong>Trademark Notice</strong>: "Nohn™" and "Second Perspective™" are unregistered trademarks in the virtual world domain, protected by unfair competition law and common law passing-off principles. Any unauthorized commercial use constitutes infringement.
 
-<strong>授权咨询</strong>：国际 / 全球 — [ai@nohnlins.com](mailto:ai@nohnlins.com) · 中国 — [lin@secondai.top](mailto:lin@secondai.top)
+<strong>License Inquiries</strong>: International / Global — [ai@nohnlins.com](mailto:ai@nohnlins.com) · China — [lin@secondai.top](mailto:lin@secondai.top)
 
 <p align="center">
   <a href="https://github.com/nohn3043-arch">GitHub</a>
