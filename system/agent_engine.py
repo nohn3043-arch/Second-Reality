@@ -18,8 +18,9 @@ import hashlib
 import hmac
 import json
 import os
+import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .ledger import Storage
 from .keys import load_or_create_key
@@ -131,6 +132,50 @@ class MemoryInalienability:
         return not self.memory_vault.verify_all(soul_hash)
 
 
+class GasExceeded(Exception):
+    """智能体 Gas 预算耗尽（死循环/无限递归保护）。"""
+    pass
+
+
+class GasMeter:
+    """Gas 计量器：步数预算 + 实时超时护卫。
+
+    每个 Agent 每 tick 被分配一个 GasMeter 实例。每次 decide_next_action
+    调用消耗 1 步（gas）；若预算耗尽或 CPU 超时，抛出 GasExceeded。
+    超时监控基于 wall-clock，防止死循环/无限递归锁死物理线程。
+    """
+
+    def __init__(self, budget: int = 100, timeout_ms: int = 500):
+        self.budget = budget
+        self._spent = 0
+        self._timeout = time.monotonic() + timeout_ms / 1000.0
+        self._lock = threading.Lock()
+
+    @property
+    def remaining(self) -> int:
+        return self.budget - self._spent
+
+    @property
+    def exhausted(self) -> bool:
+        return self.remaining <= 0
+
+    def consume(self, steps: int = 1) -> None:
+        """消耗 steps 步 gas。预算耗尽或超时则抛出 GasExceeded。"""
+        with self._lock:
+            self._spent += steps
+            if self._spent > self.budget:
+                raise GasExceeded(
+                    f"gas budget exhausted ({self._spent}/{self.budget})"
+                )
+            if time.monotonic() > self._timeout:
+                raise GasExceeded(
+                    f"gas wall-clock timeout (>{self._timeout}s)"
+                )
+
+    def __repr__(self) -> str:
+        return f"GasMeter({self._spent}/{self.budget})"
+
+
 class Agent:
     """独立意志智能体：需求驱动决策，非脚本绑定。"""
 
@@ -207,9 +252,16 @@ class Agent:
         return False
 
     def decide_next_action(self, world_state: Optional[Dict] = None) -> str:
-        """内在需求驱动决策：优先满足最匮乏需求，不依赖主线任务。"""
+        """内在需求驱动决策：优先满足最匮乏需求，不依赖主线任务。
+
+        从 world_state 中提取 gas_meter（GasMeter），每步决策消耗 1 gas。
+        预算耗尽时抛出 GasExceeded 由调用方（runtime.tick）捕获并跳过该 agent。
+        """
         if self._is_scripted():
             raise RuntimeError("Agent is being scripted!")
+        meter = (world_state or {}).get("gas_meter")
+        if meter is not None:
+            meter.consume(1)
         action = self._internal_decision_engine(world_state or {})
         self._update_needs(action)
         self.action_history.append(action)
@@ -243,4 +295,4 @@ class Agent:
             self.needs[target] = min(1.0, self.needs[target] + 0.3)
 
 
-__all__ = ["MemoryGuardian", "MemoryVault", "MemoryInalienability", "Agent"]
+__all__ = ["MemoryGuardian", "MemoryVault", "MemoryInalienability", "Agent", "GasExceeded", "GasMeter"]

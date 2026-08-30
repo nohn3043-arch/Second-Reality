@@ -17,8 +17,11 @@ import base64
 import hashlib
 import json
 import logging
+import socket
+import struct
+import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
 
 from .ledger import Storage
 from .keys import verify_signature
@@ -55,7 +58,74 @@ class ConsensusNetwork:
         )
         self.nodes: Dict[str, str] = {}
         self._load()
+        # 真联机（地基 4）：可插拔传输 + 节点端点 + 心跳活性表
+        self.transport = None            # transport.send(node_id, payload) -> response dict
+        self.endpoints: Dict[str, str] = {}  # node_id -> 静态对端地址（本地部署清单）
+        self._heartbeat: Dict[str, float] = {}
         logger.info("consensus network ready nodes=%d", len(self.nodes))
+
+    # ---- 真联机：传输 / 端点 / 心跳 ----
+    def set_transport(self, transport) -> None:
+        """注入可插拔传输（消息载体）。
+
+        接受两种形态：
+          - 对象：自身暴露 .send(node_id, payload) -> response dict
+          - 纯可调用：transport(node_id, payload) -> response dict
+        """
+        self.transport = transport
+
+    def attach_node(self, node_id: str, endpoint: Optional[str] = None) -> None:
+        """声明本节点对外可达地址（静态清单；本地部署无需公网发现）。"""
+        self.endpoints[node_id] = endpoint
+
+    def receive_vote(self, proposal_id: str, node_id: str, approve: bool) -> bool:
+        """远端传输解码后投递的投票消息（真联机入站口）。
+
+        与本地 vote() 共用同一张 votes 表与计票逻辑，只是消息来源不同——
+        由 transport.send 扇出、对端解码后回传。
+        """
+        if node_id not in self.nodes:
+            return False
+        rows = self._storage.query(
+            "SELECT proposal_id FROM proposals WHERE proposal_id=?", (proposal_id,)
+        )
+        if not rows:
+            return False
+        self._storage.execute(
+            "INSERT OR REPLACE INTO votes (proposal_id, node_id, approve, ts) "
+            "VALUES (?, ?, ?, ?)",
+            (proposal_id, node_id, 1 if approve else 0, time.time()),
+        )
+        return True
+
+    def heartbeat(self, node_id: str) -> bool:
+        """节点活性探测：注入 transport 时走真实 ping；否则以本地注册表为凭。
+
+        返回 True 表示节点当前在线。
+        """
+        if self.transport is not None:
+            carrier = self.transport
+            if callable(getattr(carrier, "send", None)):
+                sender = carrier.send
+                payload = {"op": "ping"}
+            else:
+                sender = carrier
+                payload = {"op": "ping"}
+            try:
+                resp = sender(node_id, payload)
+                alive = resp is not None
+            except Exception:
+                alive = False
+        else:
+            alive = node_id in self.nodes
+        if alive:
+            self._heartbeat[node_id] = time.time()
+        return alive
+
+    def active_nodes(self, ttl: float = 10.0) -> List[str]:
+        """返回活跃节点（心跳 ttl 窗口内），确定性排序。"""
+        now = time.time()
+        return sorted(n for n, t in self._heartbeat.items() if now - t <= ttl)
 
     # ---- 节点注册 ----
     def _load(self) -> None:
@@ -67,12 +137,13 @@ class ConsensusNetwork:
         node_id: str,
         signature: Optional[bytes] = None,
         pubkey: Optional[bytes] = None,
+        endpoint: Optional[str] = None,
     ) -> bool:
         """注册独立共识节点。node_id 唯一，不可重复注册。
 
         若提供 signature + pubkey，则验签（Ed25519，签名内容为 node_id），
         验签失败拒绝注册；若均未提供（创世引导），签名标记为 unverified
-        占位，不冒充真实签名。
+        占位，不冒充真实签名。endpoint 为可选的静态对端地址（本地部署清单）。
         """
         if not node_id or node_id in self.nodes:
             return False
@@ -84,6 +155,8 @@ class ConsensusNetwork:
             # 创世引导：明确标记未验签，不冒充真实签名
             sig = "unverified:" + _sha256(node_id)
         self.nodes[node_id] = sig
+        if endpoint:
+            self.endpoints[node_id] = endpoint
         self._storage.execute(
             "INSERT OR REPLACE INTO nodes (node_id, signature, registered_at) "
             "VALUES (?, ?, ?)",
@@ -275,4 +348,182 @@ def _sha256(payload: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-__all__ = ["ConsensusNetwork", "Governance", "CONSENSUS_THRESHOLD"]
+class TcpTransport:
+    """TCP 传输层（本地分布式部署版）。
+
+    静态清单寻址（无需 Kademlia DHT），JSON 帧以 4 字节大端长度前缀分割。
+    send(target_node_id, payload) 按 endpoint 建立临时连接→发送→接收→关闭。
+    服务端线程持续监听入站连接，将消息投递到回调函数。
+    适用于本地可信内网，不处理 NAT/公网穿透。
+    """
+
+    _HEADER = struct.Struct("!I")  # 4 字节大端无符号=帧长
+
+    def __init__(
+        self,
+        node_id: str,
+        host: str = "127.0.0.1",
+        port: int = 0,
+        endpoint_resolver: Optional[Callable[[str], Optional[str]]] = None,
+    ):
+        self.node_id = node_id
+        self.host = host
+        self.port = port
+        self._resolve = endpoint_resolver or (lambda nid: None)
+        self._server: Optional[socket.socket] = None
+        self._thread: Optional[threading.Thread] = None
+        self._running = False
+        self._callback: Optional[Callable[[str, Dict], Optional[Dict]]] = None
+        # 入站消息回调：callback(source_node_id, payload) -> response dict
+        self._lock = threading.Lock()
+
+    # ---- 生命周期 ----
+    def start(self, backlog: int = 5) -> None:
+        """启动 TCP 服务端线程。端口由 bind 确定后可通过 self.port 读取。"""
+        if self._running:
+            return
+        self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._server.bind((self.host, self.port))
+        self._server.listen(backlog)
+        self.port = self._server.getsockname()[1]
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._serve_loop, daemon=True, name=f"tcp-{self.node_id}"
+        )
+        self._thread.start()
+        logger.info(
+            "tcp transport started node=%s listen=%s:%d",
+            self.node_id, self.host, self.port,
+        )
+
+    def stop(self) -> None:
+        """停止服务端线程并关闭监听套接字。"""
+        self._running = False
+        if self._server:
+            try:
+                self._server.close()
+            except OSError:
+                pass
+            self._server = None
+        logger.info("tcp transport stopped node=%s", self.node_id)
+
+    def set_callback(self, cb: Callable[[str, Dict], Optional[Dict]]) -> None:
+        """注册入站消息处理回调。cb(source_node_id, payload) -> response dict。"""
+        self._callback = cb
+
+    # ---- 服务端 ----
+    def _serve_loop(self) -> None:
+        while self._running:
+            try:
+                conn, addr = self._server.accept()  # type: ignore[union-attr]
+                threading.Thread(
+                    target=self._handle_conn,
+                    args=(conn, addr),
+                    daemon=True,
+                ).start()
+            except OSError:
+                break  # 套接字关闭中断 accept
+
+    def _handle_conn(self, conn: socket.socket, addr: tuple) -> None:
+        try:
+            payload = self._recv_frame(conn)
+            if payload is None:
+                return
+            resp = None
+            if self._callback:
+                try:
+                    resp = self._callback(payload.get("_from", ""), payload)
+                except Exception:
+                    pass
+            self._send_frame(conn, resp or {"_error": "no_handler"})
+        finally:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+    # ---- 客户端（发送）----
+    def send(self, target_node_id: str, payload: Dict) -> Optional[Dict]:
+        """向目标节点发送 JSON 帧并等待响应。连接不足时自动重连一次。
+
+        返回响应 dict；连接失败/超时返回 None。
+        """
+        endpoint = self._resolve(target_node_id)
+        if not endpoint:
+            logger.warning("no endpoint for node=%s", target_node_id)
+            return None
+        host, port_str = endpoint.split(":")
+        port = int(port_str)
+        payload["_from"] = self.node_id
+        return self._send_to(host, port, payload)
+
+    def _send_to(
+        self, host: str, port: int, payload: Dict, retries: int = 1
+    ) -> Optional[Dict]:
+        for attempt in range(1 + retries):
+            conn = None
+            try:
+                conn = socket.create_connection(
+                    (host, port), timeout=5.0
+                )
+                self._send_frame(conn, payload)
+                return self._recv_frame(conn)
+            except (OSError, socket.timeout) as e:
+                logger.debug(
+                    "tcp send failed host=%s:%d attempt=%d/%d err=%s",
+                    host, port, attempt + 1, 1 + retries, e,
+                )
+                if attempt == retries:
+                    return None
+            finally:
+                if conn:
+                    try:
+                        conn.close()
+                    except OSError:
+                        pass
+        return None
+
+    # ---- 帧协议 ----
+    @staticmethod
+    def _send_frame(conn: socket.socket, obj: Dict) -> None:
+        data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        conn.sendall(TcpTransport._HEADER.pack(len(data)))
+        conn.sendall(data)
+
+    @staticmethod
+    def _recv_frame(conn: socket.socket) -> Optional[Dict]:
+        """接收完整 JSON 帧。逐字节读满 4 字节头 + N 字节负载。
+
+        不使用 MSG_WAITALL（Windows 不可靠），改用循环读取。
+        """
+        header = TcpTransport._recv_exact(conn, TcpTransport._HEADER.size)
+        if header is None or len(header) < TcpTransport._HEADER.size:
+            return None
+        length = TcpTransport._HEADER.unpack(header)[0]
+        if length > 1024 * 1024:  # 1MB 帧上限
+            return None
+        data = TcpTransport._recv_exact(conn, length)
+        if data is None:
+            return None
+        try:
+            return json.loads(data.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+
+    @staticmethod
+    def _recv_exact(conn: socket.socket, n: int) -> Optional[bytes]:
+        """循环读取，确保收到恰好 n 字节。"""
+        buf = bytearray()
+        while len(buf) < n:
+            try:
+                chunk = conn.recv(n - len(buf))
+            except OSError:
+                return None
+            if not chunk:
+                return None
+            buf.extend(chunk)
+        return bytes(buf)
+
+
+__all__ = ["ConsensusNetwork", "Governance", "TcpTransport", "CONSENSUS_THRESHOLD"]

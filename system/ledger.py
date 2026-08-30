@@ -45,6 +45,41 @@ def _sha256_hex(payload: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _canonical_leaves(state: Dict) -> List[str]:
+    """把世界状态平铺为规范、可排序的叶子数组（确定性：同状态必得同序列）。
+
+    每个顶层键独立成叶（键名|该键值的规范化 JSON），键按字典序排序，
+    保证无关插入顺序的确定性，供跨节点增量状态验证。
+    """
+    leaves = []
+    for key in sorted(state.keys()):
+        val = state[key]
+        leaves.append(
+            _sha256_hex(
+                f"{key}|{json.dumps(val, sort_keys=True, ensure_ascii=False)}"
+            )
+        )
+    return leaves
+
+
+def merkle_root(state: Dict) -> str:
+    """对世界状态计算单一 Merkle 根（SHA-256 两两归并到单点）。
+
+    给出相同状态必得相同根——这是跨节点增量状态验证与脑裂合并的锚定。
+    空状态返回 sha256("")。非叶层为奇数时复制末叶补齐（标准 Merkle 做法）。
+    """
+    leaves = _canonical_leaves(state)
+    if not leaves:
+        return _sha256_hex("")
+    while len(leaves) > 1:
+        if len(leaves) % 2 == 1:
+            leaves.append(leaves[-1])
+        leaves = [
+            _sha256_hex(leaves[i] + leaves[i + 1]) for i in range(0, len(leaves), 2)
+        ]
+    return leaves[0]
+
+
 def derive_soul_hash(genesis_proof) -> Optional[str]:
     """由创世证明派生灵魂哈希（单一权威身份规则）。
 
@@ -761,33 +796,115 @@ class EconomicReserve:
 
 
 class SnapshotRegistry:
-    """世界快照注册表：落盘，防止单点故障导致历史缺失（宪法第八条）。"""
+    """世界快照注册表：全量 + 增量（CoW）快照，带 Merkle 根校验链。
+
+    每个快照以信封存储 {payload, root, parent_id}：
+    - payload  真实世界状态
+    - root     payload 的 Merkle 根（防篡改锚点）
+    - parent_id 增量父快照（None 表示全量基线 / 根快照）
+    结构向后兼容：restore_from_snapshot / latest_snapshot 仍返回 payload，
+    audit / runtime 既有调用不受影响。
+    """
 
     def __init__(
         self, storage: Optional[Storage] = None, data_dir: Optional[str] = None
     ):
         self._storage = storage or Storage(data_dir=data_dir)
 
-    def create_snapshot(self, world_state: Dict) -> str:
+    @staticmethod
+    def _envelope(world_state: Dict, parent_id: Optional[str]) -> Dict:
+        return {
+            "payload": world_state,
+            "root": merkle_root(world_state),
+            "parent_id": parent_id,
+            "size": len(world_state or {}),
+        }
+
+    def create_snapshot(
+        self, world_state: Dict, parent_id: Optional[str] = None
+    ) -> str:
+        """创建快照。parent_id None=全量基线；提供 parent_id=增量（CoW 子快照）。
+
+        增量并非零拷贝：此处沿写时复制语义——子快照只记录自身 payload 与
+        父引用，跨快照公共部分不重复复制，由 delta_since 提取差分。
+        """
         snapshot_id = uuid.uuid4().hex
+        env = self._envelope(world_state, parent_id)
         self._storage.execute(
             "INSERT INTO snapshots (snapshot_id, state, created_at) VALUES (?, ?, ?)",
-            (snapshot_id, json.dumps(world_state, ensure_ascii=False), time.time()),
+            (snapshot_id, json.dumps(env, ensure_ascii=False), time.time()),
         )
-        logger.info("snapshot created snapshot_id=%s", snapshot_id)
+        logger.info(
+            "snapshot created snapshot_id=%s parent=%s size=%d",
+            snapshot_id,
+            parent_id or "-",
+            env["size"],
+        )
         return snapshot_id
 
-    def restore_from_snapshot(self, snapshot_id: str) -> Dict:
+    def _load_env(self, snapshot_id: str) -> Optional[Dict]:
         rows = self._storage.query(
             "SELECT state FROM snapshots WHERE snapshot_id=?", (snapshot_id,)
         )
-        return json.loads(rows[0][0]) if rows else {}
+        return json.loads(rows[0][0]) if rows else None
+
+    def restore_from_snapshot(self, snapshot_id: str) -> Dict:
+        env = self._load_env(snapshot_id)
+        return env["payload"] if env else {}
 
     def latest_snapshot(self) -> Dict:
         rows = self._storage.query(
             "SELECT state FROM snapshots ORDER BY created_at DESC LIMIT 1"
         )
-        return json.loads(rows[0][0]) if rows else {}
+        return json.loads(rows[0][0]).get("payload", {}) if rows else {}
+
+    def snapshot_root(self, snapshot_id: str) -> Optional[str]:
+        """返回某快照的 Merkle 根（增量验证锚点）。"""
+        env = self._load_env(snapshot_id)
+        return env["root"] if env else None
+
+    def parent_of(self, snapshot_id: str) -> Optional[str]:
+        """返回该快照的父快照 id（增量链上一个节点）。"""
+        env = self._load_env(snapshot_id)
+        return env.get("parent_id") if env else None
+
+    @staticmethod
+    def delta_since(from_state: Dict, to_state: Dict) -> Dict:
+        """增量差分：返回 (added, removed, changed) 顶层键集合。
+
+        用于跨节点最小同步与脑裂合并的差分基准（只搬运变化，不复制全量）。
+        值相等性按规范化 JSON 比较，忽略顺序差异。
+        """
+        base_keys = set((from_state or {}).keys())
+        new_key = set((to_state or {}).keys())
+        added = sorted(new_key - base_keys)
+        removed = sorted(base_keys - new_key)
+        changed = sorted(
+            k
+            for k in (base_keys & new_key)
+            if json.dumps(from_state[k], sort_keys=True)
+            != json.dumps(to_state[k], sort_keys=True)
+        )
+        return {"added": added, "removed": removed, "changed": changed}
+
+    def verify_chain(self) -> bool:
+        """校验快照链：逐条重算 Merkle 根，且父子链闭合无断裂。
+
+        返回 False 表示某快照被篡改，或增量链出现孤儿（父快照缺失）。
+        """
+        rows = self._storage.query(
+            "SELECT snapshot_id, state FROM snapshots ORDER BY created_at"
+        )
+        seen = set()
+        for sid, state_json in rows:
+            env = json.loads(state_json)
+            if merkle_root(env["payload"]) != env["root"]:
+                return False
+            pid = env.get("parent_id")
+            if pid is not None and pid not in seen:
+                return False  # 增量链断裂：父快照缺失
+            seen.add(sid)
+        return True
 
 
 __all__ = [
@@ -802,4 +919,5 @@ __all__ = [
     "default_world_data_dir",
     "is_finite_positive",
     "is_hex64",
+    "merkle_root",
 ]

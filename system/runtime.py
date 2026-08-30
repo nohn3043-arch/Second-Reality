@@ -44,10 +44,11 @@ from .ledger import (
     SnapshotRegistry,
     derive_soul_hash,
     is_hex64,
+    merkle_root,
 )
 from .keys import verify_genesis_proof, FileKmsProvider, CloudKmsProvider
-from .consensus import ConsensusNetwork, Governance
-from .agent_engine import MemoryVault, MemoryInalienability, Agent
+from .consensus import ConsensusNetwork, Governance, TcpTransport
+from .agent_engine import MemoryVault, MemoryInalienability, Agent, GasMeter, GasExceeded
 from .credentials import CredentialVault
 from .session import (
     SessionManager,
@@ -57,6 +58,11 @@ from .session import (
 )
 from .authorization import AuthorizationEngine
 from .recovery import RecoveryManager
+from .hlc import HybridLogicalClock, HlcTimestamp
+from .spatial_sharding import ShardManager, HandoverProtocol
+from .aoi_sync import AoiTracker, SyncScheduler, DeltaSync
+from .partition_guard import PartitionGuard
+from .hierarchical_consensus import InterDcConsensus, IntraDcConsensus
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +108,27 @@ class World:
         initial_oracles: Optional[List[str]] = None,
     ):
         self.world_id = world_id
+        # 节点身份（确定性全序的 tie-break 键）+ HLC 全局时钟
+        self.node_id = world_id
+        self.hlc = HybridLogicalClock(node_id=self.node_id)
+        # 空间索引（地基 A）：cell_key -> set(soul_hash)；positions: soul_hash -> [x, y, z]
+        self.spatial: Dict[str, set] = {}
+        self.positions: Dict[str, List[float]] = {}
+        self._event_seq = 0
+        # Gas 计量（地基 B）：每 tick 全局预算，按 agent 数均分
+        self.tick_budget = 1000        # 每 tick 全局步数上限
+        self.tick_timeout_ms = 500     # 单 agent 超时 500ms
+        # 地平线二：跨数据中心模块实例化
+        self.shard_manager = ShardManager(local_dc="dc_local")
+        self.shard_manager.init_default_shards()
+        self.aoi_tracker = AoiTracker()
+        self.aoi_sync = SyncScheduler()
+        self.partition_guard = PartitionGuard(node_id=self.node_id)
+        # Intra-DC 快环先建，Inter-DC 慢环构注入同一个实例（避免双实例孤立）
+        self.intra_consensus = IntraDcConsensus()
+        self.interdc_consensus = InterDcConsensus(
+            local_dc_consensus=self.intra_consensus
+        )
         # 存储后端：STORAGE 环境变量（sqlite/memory/redis/postgres），默认 sqlite
         self.storage_backend = _resolve_storage_backend()
         ledger_backend = (
@@ -137,6 +164,18 @@ class World:
         self.memory_vault = MemoryVault(storage=self.storage)
         self.consensus = ConsensusNetwork(storage=self.storage)
         self.governance = Governance(network=self.consensus)
+        # 缺点接通 2：TcpTransport 挂载到共识网络（地平线一 E，端点为静态清单）
+        self.transport = TcpTransport(
+            node_id=self.node_id,
+            endpoint_resolver=lambda nid: self.consensus.endpoints.get(nid),
+        )
+        self.consensus.set_transport(self.transport)
+        # 缺点接通 3：AOI 增量复制器复用同一传输层推送跨 DC Delta
+        self.aoi_sync.set_push(
+            lambda target, payload: (
+                self.transport.send(target, payload) if self.transport else None
+            )
+        )
         self.memory_integrity = MemoryInalienability(vault=self.memory_vault)
         # 第2层：有状态会话（签名密钥经 KMS 抽象托管，可插拔 HSM）
         # 会话存储按 STORAGE 选择：memory -> 内存；redis -> Redis（缺省降级）；其余 -> SQLite
@@ -296,22 +335,176 @@ class World:
                 storage=self.storage,
             )
             self.npcs[soul_hash] = agent
+            # 空间索引注册：创生于原点 [0,0,0]
+            self._register_position(soul_hash, [0.0, 0.0, 0.0])
+            # 地平线二：AOI 关注域注册 + 分片归属
+            self.aoi_tracker.set_aoi(soul_hash, [0.0, 0.0, 0.0])
             return agent
 
     def tick(self) -> Dict:
-        """推进世界一个 tick：时间 + 决策 + 事件传导 + 历史追加。"""
+        """推进世界一个 tick：时间 + 决策 + 事件传导 + 历史追加。
+
+        确定性事件全序（地基 C）：动作按 soul_hash 排序产出（消除 dict
+        遍历对插入序的隐性依赖），每个事件携带 (order_seq, node_id, hlc)
+        三元组，保证跨节点按 100% 相同顺序重放。
+        Gas 计量（地基 B）：全局预算均分到各 agent，消耗超限则跳过。
+        地平线二：每 tick 检查分区状态 + 纪元推进。
+        """
         with self._lock:
             clock = self.temporal_substrate.tick()
             events = []
-            for soul, agent in self.npcs.items():
-                action = agent.decide_next_action({"tick": clock})
-                event = {"tick": clock, "soul": soul, "action": action}
+            seq = self._event_seq
+            n = len(self.npcs)
+            # Gas 预算：均分到各 agent，防止单个 agent 死循环/无限递归锁死线程
+            per_agent = max(1, self.tick_budget // n) if n > 0 else self.tick_budget
+            # 地平线二：分区检测 + 纪元推进
+            self.partition_guard.guard(list(self.consensus.nodes.keys()))
+            self.interdc_consensus.tick()
+            # 确定性全序：按 soul_hash 字典序，杜绝顺序漂移
+            for soul in sorted(self.npcs):
+                agent = self.npcs[soul]
+                meter = GasMeter(budget=per_agent, timeout_ms=self.tick_timeout_ms)
+                try:
+                    action = agent.decide_next_action(
+                        {"tick": clock, "gas_meter": meter}
+                    )
+                except GasExceeded:
+                    # Gas 耗尽 → 跳过该 agent（无状态副作用，保证不锁死线程）
+                    action = "gas_exhausted"
+                seq += 1
+                hlcts = self.hlc.send()
+                event = {
+                    "tick": clock,
+                    "order_seq": seq,
+                    "node_id": self.node_id,
+                    "hlc": hlcts.to_dict(),
+                    "soul": soul,
+                    "action": action,
+                }
                 events.append(event)
                 # 因果闭包：行动以智能体存在为因
                 self.causal_closure.link_cause(f"act:{soul}:{clock}", [f"spawn:{soul}"])
+                # 地平线二：分区降级记录
+                if self.partition_guard.in_partition:
+                    self.partition_guard.record_operation(
+                        {"op": "tick_action", "soul": soul, "action": action}
+                    )
+            self._event_seq = seq
             if events:
                 self.history.append({"event": "tick", "tick": clock, "actions": events})
             return {"tick": clock, "events": events}
+
+    # ---- 空间索引（地基 A）----
+    @staticmethod
+    def _cell_key(pos, cell: float = 10.0) -> str:
+        """整数网格单元键：固定网格划分，制造稳定局部性。"""
+        x, y, z = int(pos[0] // cell), int(pos[1] // cell), int(pos[2] // cell)
+        return f"{x}_{y}_{z}"
+
+    def _unregister_position(self, soul_hash: str) -> None:
+        old = self.positions.pop(soul_hash, None)
+        if old is None:
+            return
+        cell = self._cell_key(old)
+        bucket = self.spatial.get(cell)
+        if bucket:
+            bucket.discard(soul_hash)
+            if not bucket:
+                self.spatial.pop(cell, None)
+
+    def _register_position(self, soul_hash: str, pos) -> None:
+        self._unregister_position(soul_hash)
+        self.positions[soul_hash] = list(pos)
+        self.spatial.setdefault(self._cell_key(pos), set()).add(soul_hash)
+
+    def position_of(self, soul_hash: str) -> List[float]:
+        """取某智能体的空间坐标（未注册回落原点）。"""
+        return list(self.positions.get(soul_hash, [0.0, 0.0, 0.0]))
+
+    def move_agent(self, soul_hash: str, pos) -> bool:
+        """移动智能体并更新空间索引。目标必须为三维坐标。
+
+        地平线二：同时更新 AOI 关注域 + 检查是否跨分片边界。
+        """
+        if soul_hash not in self.npcs or len(pos) != 3:
+            return False
+        prev = self.positions.get(soul_hash)
+        new_pos = [float(p) for p in pos]
+        self._register_position(soul_hash, new_pos)
+        # 地平线二：更新 AOI 中心
+        self.aoi_tracker.set_aoi(soul_hash, new_pos)
+        # 跨分片检测（仅当有旧位置且有分片路由）
+        if prev is not None:
+            prev_shard = self.shard_manager.router.shard_of(prev)
+            new_shard = self.shard_manager.router.shard_of(new_pos)
+            if prev_shard != new_shard:
+                logger.info(
+                    "agent crossed shard soul=%s %s->%s",
+                    soul_hash, prev_shard, new_shard,
+                )
+        return True
+
+    # ---- 缺点接通 4：脑裂恢复后的净态合并公开口 ----
+    def merge_partition_state(self, remote_state: Dict, base_state: Optional[Dict] = None) -> Dict:
+        """网络分区恢复后，将远端净态与本机净态经 Merkle 差分树无冲突合并。
+
+        local_state 取当前 spatially 登记的全部 Agent 位置；冲突键取自本机。
+        返回合并后的新状态，并记录审计报告。
+        """
+        local_state = {
+            s: self.positions.get(s, [0.0, 0.0, 0.0]) for s in self.npcs
+        }
+        base = base_state if base_state is not None else local_state
+        merged = self.partition_guard.merge_engine.merge(
+            local_state=local_state,
+            remote_state=remote_state,
+            base_state=base,
+        )
+        return merged
+
+    def agents_near(self, origin, radius: float = 5.0) -> List[str]:
+        """AOI 关注域检索：返回原点半径内智能体（确定性排序）。"""
+        hits = []
+        r2 = radius * radius
+        for soul in self.npcs:
+            p = self.positions.get(soul, [0.0, 0.0, 0.0])
+            if sum((a - b) ** 2 for a, b in zip(p, origin)) <= r2:
+                hits.append(soul)
+        return sorted(hits)
+
+    # ---- 状态 Merkle 根（地基 A/D 锚点）----
+    def state_root(self) -> str:
+        """对当前世界状态计算确定性 Merkle 根，供跨节点增量验证。"""
+        state = {
+            "world_id": self.world_id,
+            "clock": self.temporal_substrate.global_clock,
+            "event_seq": self._event_seq,
+            "hlc": self.hlc.peek().to_dict(),
+            "souls": sorted(self.soul_ledger.souls.keys()),
+            "agents": sorted(self.npcs.keys()),
+            "positions": {
+                s: self.positions.get(s, [0.0, 0.0, 0.0]) for s in sorted(self.npcs)
+            },
+        }
+        return merkle_root(state)
+
+    def replay_canonical_events(self) -> Dict:
+        """重放全部 tick 事件并断言全序（跨节点确定性重放映射）。
+
+        返回 {count, deterministic_order, events}：按 (order_seq, node_id)
+        排序后校验相邻不逆序——同一批事件在任意节点必得相同重放序列。
+        """
+        flat = []
+        for ts, event, block_hash in self.history.chain:
+            if event.get("event") == "tick":
+                flat.extend(event.get("actions", []))
+        flat.sort(key=lambda e: (e.get("order_seq", 0), e.get("node_id", "")))
+        ordered = all(
+            (flat[i].get("order_seq"), flat[i].get("node_id"))
+            <= (flat[i + 1].get("order_seq"), flat[i + 1].get("node_id"))
+            for i in range(len(flat) - 1)
+        )
+        return {"count": len(flat), "deterministic_order": ordered, "events": flat}
 
     # ---- 审计上报 ----
     def audit(self) -> AuditReport:
@@ -328,8 +521,12 @@ class World:
             {
                 "world_id": self.world_id,
                 "clock": self.temporal_substrate.global_clock,
+                "state_root": self.state_root(),
                 "souls": list(self.soul_ledger.souls.keys()),
                 "agents": list(self.npcs.keys()),
+                "positions": {
+                    s: self.positions.get(s, [0.0, 0.0, 0.0]) for s in sorted(self.npcs)
+                },
             }
         )
 

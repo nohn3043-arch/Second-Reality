@@ -13,9 +13,16 @@
 # 的 19 项审计检查；创世（GenesisCondition.initiate_genesis）所需的
 # 组件全部由本包真实创建并注入。
 #
-# 模块规划（桩转实渐进式落地）：
-#   ledger.py        状态账本：SoulLedger / HistoryLedger / EconomicReserve（持久化）
-#   consensus.py     共识：节点注册、提案、公投计票（≥2/3）
-#   agent_engine.py  智能体：决策 + 记忆封存/校验
-#   runtime.py       无头运行时：tick 循环 + 快照 + 审计上报
-#   api.py           服务接口：REST/WebSocket + 鉴权
+# 模块规划（地平线一·地基）：
+#   ledger.py              状态账本：SoulLedger / HistoryLedger / EconomicReserve
+#   consensus.py           共识：节点注册、提案、公投计票
+#   agent_engine.py        智能体：决策 + 记忆封存 + Gas 计量
+#   runtime.py             无头运行时：tick 循环 + 快照 + 审计上报
+#   api.py                 服务接口：REST/WebSocket + 鉴权
+#
+# 地平线二·跨数据中心底座：
+#   hlc.py                 混合逻辑时钟预言机（NTP 底座 + Lamport 计数）
+#   spatial_sharding.py    空间分片路由 + 跨域迁移手协
+#   aoi_sync.py            AOI 关注域 + WAN 增量复制器
+#   partition_guard.py     网络分区检测 + 局部自治 + Merkle 差分合并
+#   hierarchical_consensus.py 分层双环共识（Intra-DC 快环 + Inter-DC 慢环）
