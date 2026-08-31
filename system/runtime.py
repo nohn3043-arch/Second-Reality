@@ -115,6 +115,8 @@ class World:
         self.spatial: Dict[str, set] = {}
         self.positions: Dict[str, List[float]] = {}
         self._event_seq = 0
+        # 确定性排序缓存（#3 优化）：避免每 tick 反复 sorted(self.npcs)
+        self._npcs_sorted_cache: Optional[List[str]] = None
         # Gas 计量（地基 B）：每 tick 全局预算，按 agent 数均分
         self.tick_budget = 1000        # 每 tick 全局步数上限
         self.tick_timeout_ms = 500     # 单 agent 超时 500ms
@@ -335,6 +337,7 @@ class World:
                 storage=self.storage,
             )
             self.npcs[soul_hash] = agent
+            self._invalidate_npc_cache()
             # 空间索引注册：创生于原点 [0,0,0]
             self._register_position(soul_hash, [0.0, 0.0, 0.0])
             # 地平线二：AOI 关注域注册 + 分片归属
@@ -361,7 +364,7 @@ class World:
             self.partition_guard.guard(list(self.consensus.nodes.keys()))
             self.interdc_consensus.tick()
             # 确定性全序：按 soul_hash 字典序，杜绝顺序漂移
-            for soul in sorted(self.npcs):
+            for soul in self._sorted_npcs():
                 agent = self.npcs[soul]
                 meter = GasMeter(budget=per_agent, timeout_ms=self.tick_timeout_ms)
                 try:
@@ -400,6 +403,15 @@ class World:
         """整数网格单元键：固定网格划分，制造稳定局部性。"""
         x, y, z = int(pos[0] // cell), int(pos[1] // cell), int(pos[2] // cell)
         return f"{x}_{y}_{z}"
+
+    def _invalidate_npc_cache(self) -> None:
+        self._npcs_sorted_cache = None
+
+    def _sorted_npcs(self) -> List[str]:
+        """返回排序后的 npc 键列表（惰性缓存，避免每 tick 重排）。"""
+        if self._npcs_sorted_cache is None:
+            self._npcs_sorted_cache = sorted(self.npcs)
+        return self._npcs_sorted_cache
 
     def _unregister_position(self, soul_hash: str) -> None:
         old = self.positions.pop(soul_hash, None)
@@ -463,11 +475,28 @@ class World:
         return merged
 
     def agents_near(self, origin, radius: float = 5.0) -> List[str]:
-        """AOI 关注域检索：返回原点半径内智能体（确定性排序）。"""
-        hits = []
+        """AOI 关注域检索：利用空间网格索引避免全表扫描。
+
+        只扫描 origin 周围 3×3×3 个 cell 内的候选灵魂，再按精确欧氏
+        距离过滤——从 O(N) 降至 O(局部候选数)。
+        """
         r2 = radius * radius
-        for soul in self.npcs:
-            p = self.positions.get(soul, [0.0, 0.0, 0.0])
+        cell = 10.0
+        cx, cy, cz = int(origin[0] // cell), int(origin[1] // cell), int(origin[2] // cell)
+        span = int(radius // cell) + 1
+        candidate_set: set = set()
+        for dx in range(-span, span + 1):
+            for dy in range(-span, span + 1):
+                for dz in range(-span, span + 1):
+                    key = f"{cx + dx}_{cy + dy}_{cz + dz}"
+                    bucket = self.spatial.get(key)
+                    if bucket:
+                        candidate_set.update(bucket)
+        hits = []
+        for soul in candidate_set:
+            p = self.positions.get(soul)
+            if p is None:
+                continue
             if sum((a - b) ** 2 for a, b in zip(p, origin)) <= r2:
                 hits.append(soul)
         return sorted(hits)
