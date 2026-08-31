@@ -365,10 +365,17 @@ class TcpTransport:
         host: str = "127.0.0.1",
         port: int = 0,
         endpoint_resolver: Optional[Callable[[str], Optional[str]]] = None,
+        timeout: float = 5.0,
+        retries: int = 1,
     ):
         self.node_id = node_id
         self.host = host
         self.port = port
+        # 单次连接超时与重试次数。集群心跳必须短超时 + 零重试：
+        # Windows 上目标端口无监听时并非立即 RST，而是挂到超时，
+        # 5s 超时 × 1 次重试会让一轮心跳卡 10s，故障检测形同失效。
+        self._timeout = timeout
+        self._retries = retries
         self._resolve = endpoint_resolver or (lambda nid: None)
         self._server: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
@@ -444,9 +451,12 @@ class TcpTransport:
                 pass
 
     # ---- 客户端（发送）----
-    def send(self, target_node_id: str, payload: Dict) -> Optional[Dict]:
-        """向目标节点发送 JSON 帧并等待响应。连接不足时自动重连一次。
+    def send(
+        self, target_node_id: str, payload: Dict, retries: Optional[int] = None
+    ) -> Optional[Dict]:
+        """向目标节点发送 JSON 帧并等待响应。
 
+        retries 为 None 时沿用实例默认值；心跳场景应显式传 0。
         返回响应 dict；连接失败/超时返回 None。
         """
         endpoint = self._resolve(target_node_id)
@@ -456,25 +466,26 @@ class TcpTransport:
         host, port_str = endpoint.split(":")
         port = int(port_str)
         payload["_from"] = self.node_id
-        return self._send_to(host, port, payload)
+        return self._send_to(host, port, payload, retries)
 
     def _send_to(
-        self, host: str, port: int, payload: Dict, retries: int = 1
+        self, host: str, port: int, payload: Dict, retries: Optional[int] = None
     ) -> Optional[Dict]:
-        for attempt in range(1 + retries):
+        attempts = self._retries if retries is None else retries
+        for attempt in range(1 + attempts):
             conn = None
             try:
                 conn = socket.create_connection(
-                    (host, port), timeout=5.0
+                    (host, port), timeout=self._timeout
                 )
                 self._send_frame(conn, payload)
                 return self._recv_frame(conn)
             except (OSError, socket.timeout) as e:
                 logger.debug(
                     "tcp send failed host=%s:%d attempt=%d/%d err=%s",
-                    host, port, attempt + 1, 1 + retries, e,
+                    host, port, attempt + 1, 1 + attempts, e,
                 )
-                if attempt == retries:
+                if attempt == attempts:
                     return None
             finally:
                 if conn:

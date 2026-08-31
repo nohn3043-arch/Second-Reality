@@ -181,9 +181,18 @@ class InterDcConsensus:
     不要求实时共识，而是通过 epoch 批量对账达成最终一致性。
     """
 
-    def __init__(self, local_dc_consensus: Optional[IntraDcConsensus] = None):
+    def __init__(
+        self,
+        local_dc_consensus: Optional[IntraDcConsensus] = None,
+        dc_id: str = "",
+        transport_send: Optional[Callable[[str, Dict], Optional[Dict]]] = None,
+    ):
         self.intra = local_dc_consensus or IntraDcConsensus()
-        self.epoch_manager = EpochManager()
+        # dc_id 与传输未注入时，广播恒为 None（跨 DC 慢环无出口）。
+        # 运行时必须显式注入，否则本模块退化为纯本地纪元计数。
+        self.epoch_manager = EpochManager(
+            dc_id=dc_id, transport_send=transport_send
+        )
         self._dc_nodes: Dict[str, List[str]] = {}         # dc_id -> node_ids
         self._global_epoch_state: Dict[str, Dict] = {}    # 全局纪元状态
 
@@ -215,14 +224,25 @@ class InterDcConsensus:
         self.epoch_manager.receive_epoch(remote_dc, epoch_id, proposals)
 
     def tick(self) -> Dict:
-        """每 tick 调用：检查是否需要推进 epoch。"""
-        result = {"intra_consensus": None, "epoch_advance": None}
+        """每 tick 调用：检查是否需要推进 epoch。
+
+        返回 target_dcs 供调用方（runtime）交给后台线程广播——本方法
+        自身不发起任何网络调用，避免把 WAN 延迟带进主循环。
+        """
+        result: Dict[str, Any] = {
+            "intra_consensus": None,
+            "epoch_advance": None,
+            "target_dcs": [],
+        }
         if self.epoch_manager.should_advance():
             closed = self.epoch_manager.advance_epoch()
             result["epoch_advance"] = {
                 "epoch_id": closed.epoch_id,
                 "proposals": len(closed.proposals),
             }
+            result["target_dcs"] = sorted(
+                d for d in self._dc_nodes if d != self.epoch_manager.dc_id
+            )
         return result
 
 
