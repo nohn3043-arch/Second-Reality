@@ -16,6 +16,7 @@
 
 import base64
 import hashlib
+import json
 import os
 import secrets
 from typing import Dict, Optional
@@ -255,8 +256,11 @@ class CloudKmsProvider(KmsKeyProvider):
       from my_kms_adapter import client   # 腾讯云 KMS / AWS KMS / 阿里云 KMS ...
       kms = CloudKmsProvider(client)
       key = kms.get_or_create_key("session_signing_key")
-    client 约定实现 get_or_create_key(key_id) -> bytes：
-      密钥不存在时生成并返回明文；存在时解密返回明文。
+    client 约定实现以下方法：
+      - create_key(key_id) -> None          创建主密钥（幂等）
+      - generate_data_key(key_id) -> (plaintext, ciphertext)
+        生成数据密钥，返回明文+密文对
+      - decrypt(ciphertext) -> plaintext     解密数据密钥
 
     本地未注入云客户端（client=None）时自动降级文件后端（演示/测试），
     构造时打印一次警告，便于发现漏配。
@@ -265,17 +269,51 @@ class CloudKmsProvider(KmsKeyProvider):
     def __init__(self, client=None, key_dir: Optional[str] = None):
         self._client = client
         self._key_dir = key_dir or "."
+        # 信封加密元数据存储：key_id -> encrypted_dek（base64）
+        self._envelope_path = os.path.join(self._key_dir, ".kms_envelope.json")
+        self._envelopes: Dict[str, str] = {}
+        self._load_envelopes()
         if client is None:
             print(
                 "[kms] CloudKmsProvider 未注入云客户端，降级为文件后端"
                 f"（{os.path.join(self._key_dir, '<key_id>')}）；生产环境请注入云 KMS client"
             )
 
+    def _load_envelopes(self) -> None:
+        """加载已持久化的信封密文（加密的 DEK）。"""
+        try:
+            with open(self._envelope_path, "r") as f:
+                self._envelopes = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            self._envelopes = {}
+
+    def _save_envelopes(self) -> None:
+        """持久化信封密文。"""
+        os.makedirs(self._key_dir, exist_ok=True)
+        with open(self._envelope_path, "w") as f:
+            json.dump(self._envelopes, f)
+
     def get_or_create_key(self, key_id: str) -> bytes:
         if self._client is None:
             # 演示/测试降级：文件持久化（与 FileKmsProvider 等价，生产不可用）
             return load_or_create_key(os.path.join(self._key_dir, key_id))
-        return self._client.get_or_create_key(key_id)
+
+        # 信封加密：首次创建 DEK 并用云 KMS 加密，后续从密文解密
+        if key_id in self._envelopes:
+            # 已有信封：用云 KMS 解密 DEK 密文 → 明文
+            encrypted_dek = base64.b64decode(self._envelopes[key_id])
+            plaintext_dek = self._client.decrypt(encrypted_dek)
+            return plaintext_dek
+
+        # 首次创建：请求云 KMS 生成数据密钥对
+        try:
+            self._client.create_key(key_id)
+        except Exception:
+            pass  # 幂等：密钥已存在不报错
+        plaintext_dek, encrypted_dek = self._client.generate_data_key(key_id)
+        self._envelopes[key_id] = base64.b64encode(encrypted_dek).decode("ascii")
+        self._save_envelopes()
+        return plaintext_dek
 
 
 __all__ = [

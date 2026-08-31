@@ -72,7 +72,7 @@ logger = logging.getLogger(__name__)
 #   sqlite   默认：账本落盘 SQLite，会话同库
 #   memory   测试/无状态演示：账本进程内 :memory:，会话内存 dict
 #   redis    生产：账本本地 SQLite + 会话外置 Redis（需 redis-py，缺省降级）
-#   postgres 生产：账本预留 PG 驱动接口（当前降级 SQLite，分片路由已就绪）
+#   postgres 生产：账本走 PostgreSQL（需 psycopg2，DSN 由 DATABASE_URL 或 pg_dsn 参数传入）
 _STORAGE_BACKENDS = ("sqlite", "memory", "redis", "postgres")
 
 # 集群模式下的出站超时与重试。心跳探测必须快速失败：Windows 上目标端口
@@ -183,10 +183,13 @@ class World:
         )
         # 存储后端：STORAGE 环境变量（sqlite/memory/redis/postgres），默认 sqlite
         self.storage_backend = _resolve_storage_backend()
-        ledger_backend = (
-            self.storage_backend if self.storage_backend in ("sqlite", "memory") else "sqlite"
-        )
-        self.storage = Storage(data_dir=data_dir, backend=ledger_backend)
+        if self.storage_backend == "postgres":
+            self.storage = Storage(data_dir=data_dir, backend="postgres")
+        else:
+            ledger_backend = (
+                self.storage_backend if self.storage_backend in ("sqlite", "memory") else "sqlite"
+            )
+            self.storage = Storage(data_dir=data_dir, backend=ledger_backend)
         # 并发保护：ThreadingHTTPServer 多线程下 tick/spawn 串行化，防状态竞态
         self._lock = threading.Lock()
 

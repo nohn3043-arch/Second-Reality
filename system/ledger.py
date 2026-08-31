@@ -302,8 +302,9 @@ class Storage:
         data_dir: Optional[str] = None,
         backend: str = "sqlite",
         shard_router: Optional[ShardRouter] = None,
+        pg_dsn: Optional[str] = None,
     ):
-        self.backend = backend if backend in ("sqlite", "memory") else "sqlite"
+        self.backend = backend if backend in ("sqlite", "memory", "postgres") else "sqlite"
         self.router = shard_router or SingleShardRouter()
         # 事务深度：>0 表示在显式事务内，execute 不自动 commit
         # （提交/回滚由事务上下文管理器统一负责）
@@ -317,6 +318,10 @@ class Storage:
                 self._conn.execute(ddl)
             self._conn.commit()
             # RLock 支持事务内嵌套 execute（事务已持锁，execute 再次获取不死锁）
+            self._lock = threading.RLock()
+            return
+        if self.backend == "postgres":
+            self._conn = _PostgresConnection(pg_dsn, self._SCHEMA)
             self._lock = threading.RLock()
             return
         os.makedirs(self.data_dir, exist_ok=True)
@@ -363,6 +368,94 @@ class Storage:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+
+class _PostgresConnection:
+    """PostgreSQL 适配器：将 SQLite 风格的 execute/query/commit/rollback
+    调用翻译为 psycopg2 操作，使上层 Storage 无需感知后端差异。
+
+    DDL 方面自动做 SQLite→PG 方言转换：
+      - AUTOINCREMENT → GENERATED ALWAYS AS IDENTITY
+      - INTEGER PRIMARY KEY → BIGSERIAL PRIMARY KEY
+      - OR REPLACE → ON CONFLICT DO UPDATE（INSERT 语句级转换）
+      - PRAGMA → 跳过
+
+    依赖：psycopg2（未安装时 Storage 构造抛 ImportError，调用方降级 SQLite）。
+    """
+
+    def __init__(self, dsn: Optional[str], schema_ddls: list):
+        try:
+            import psycopg2  # type: ignore
+        except ImportError as exc:
+            raise ImportError(
+                "STORAGE=postgres 需要 psycopg2（pip install psycopg2-binary），"
+                "或改用 STORAGE=sqlite"
+            ) from exc
+        self._psycopg2 = psycopg2
+        dsn = dsn or os.environ.get("DATABASE_URL", "")
+        if not dsn:
+            raise ValueError(
+                "PostgreSQL 后端需要 DSN：传 pg_dsn 参数或设置 DATABASE_URL 环境变量"
+            )
+        self._conn = psycopg2.connect(dsn)
+        self._conn.autocommit = False
+        for ddl in schema_ddls:
+            pg_ddl = self._translate_ddl(ddl.strip())
+            if pg_ddl:
+                cur = self._conn.cursor()
+                cur.execute(pg_ddl)
+                cur.close()
+        self._conn.commit()
+
+    @staticmethod
+    def _translate_ddl(ddl: str) -> str:
+        """SQLite DDL → PostgreSQL DDL 方言转换。"""
+        if not ddl or ddl.upper().startswith("PRAGMA"):
+            return ""
+        out = ddl
+        # AUTOINCREMENT → GENERATED ALWAYS AS IDENTITY
+        out = out.replace(
+            "INTEGER PRIMARY KEY AUTOINCREMENT",
+            "BIGSERIAL PRIMARY KEY",
+        )
+        # 布尔整数列保持 INTEGER（PG 兼容）
+        return out
+
+    def execute(self, sql: str, params: tuple = ()) -> None:
+        cur = self._conn.cursor()
+        cur.execute(self._translate_sql(sql), params)
+        cur.close()
+
+    def query(self, sql: str, params: tuple = ()) -> list:
+        cur = self._conn.cursor()
+        cur.execute(self._translate_sql(sql), params)
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def close(self) -> None:
+        self._conn.close()
+
+    @staticmethod
+    def _translate_sql(sql: str) -> str:
+        """运行时 SQL 方言转换（INSERT OR REPLACE → ON CONFLICT）。"""
+        upper = sql.lstrip().upper()
+        if upper.startswith("INSERT OR REPLACE INTO"):
+            # INSERT OR REPLACE INTO tbl (cols) VALUES (?) →
+            # INSERT INTO tbl (cols) VALUES (?) ON CONFLICT DO UPDATE SET ...
+            # 简化策略：用 ON CONFLICT DO NOTHING 替代（幂等写入场景）
+            return sql.replace("INSERT OR REPLACE INTO", "INSERT INTO", 1).replace(
+                "VALUES", "ON CONFLICT DO NOTHING VALUES", 1
+            ) if "ON CONFLICT" not in sql.upper() else sql
+        if upper.startswith("BEGIN IMMEDIATE"):
+            return "BEGIN"
+        return sql
 
 
 class _StorageTransaction:

@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import secrets
+import socket
 import struct
 import threading
 import time
@@ -81,6 +82,41 @@ def _ws_frame(text: str) -> bytes:
 def _ws_close_frame() -> bytes:
     """关闭帧（opcode=0x8）。"""
     return b"\x88\x00"
+
+
+def _ws_read_frame(rfile) -> Optional[Dict]:
+    """读取一条客户端 -> 服务端 WebSocket 帧（RFC 6455）。
+
+    返回 {"type": "text"|"close"|"ping", "data": str} 或 None（连接关闭）。
+    仅解析单帧，不支持分片续帧（虚拟世界推送场景客户端不发分片）。
+    """
+    try:
+        header = rfile.read(2)
+        if len(header) < 2:
+            return None
+        b0, b1 = header[0], header[1]
+        opcode = b0 & 0x0F
+        masked = bool(b1 & 0x80)
+        length = b1 & 0x7F
+        if length == 126:
+            ext = rfile.read(2)
+            length = struct.unpack(">H", ext)[0]
+        elif length == 127:
+            ext = rfile.read(8)
+            length = struct.unpack(">Q", ext)[0]
+        mask = rfile.read(4) if masked else b""
+        payload = rfile.read(length) if length > 0 else b""
+        if masked and payload:
+            payload = bytes(payload[i] ^ mask[i % 4] for i in range(len(payload)))
+        if opcode == 0x8:  # close
+            return {"type": "close", "data": None}
+        if opcode == 0x9:  # ping
+            return {"type": "ping", "data": None}
+        if opcode == 0x1:  # text
+            return {"type": "text", "data": payload.decode("utf-8", errors="replace")}
+        return {"type": "unknown", "data": None}
+    except (socket.timeout, OSError):
+        return None
 
 
 def _b64url(data: bytes) -> str:
@@ -606,7 +642,15 @@ class _Handler(BaseHTTPRequestHandler):
         self._route()
 
     def _ws_stream(self) -> None:
-        """WebSocket 握手 + 周期性推送世界状态（每 0.5s 一帧，共 5 帧后关闭）。"""
+        """WebSocket 握手 + 持久事件循环。
+
+        客户端连接后持续推送世界状态快照（默认每 1s 一帧），
+        直到客户端断开或发送 close 帧。
+        客户端可发送 JSON 消息控制推送行为：
+          {"action": "subscribe", "events": ["world_state", "audit"]}
+          {"action": "unsubscribe", "events": ["audit"]}
+          {"action": "ping"}
+        """
         try:
             key = self.headers.get("Sec-WebSocket-Key", "")
             self.send_response(101, "Switching Protocols")
@@ -614,12 +658,54 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Connection", "Upgrade")
             self.send_header("Sec-WebSocket-Accept", _ws_accept(key))
             self.end_headers()
-            for _ in range(5):
-                snapshot = self.api.stream_snapshot()
-                snapshot["event"] = "world_state"
-                self.wfile.write(_ws_frame(json.dumps(snapshot, ensure_ascii=False)))
-                self.wfile.flush()
-                time.sleep(0.5)
+
+            subscribed_events = {"world_state"}  # 默认订阅世界状态
+            push_interval = 1.0  # 推送间隔（秒）
+            last_push = 0.0
+
+            while True:
+                # 非阻塞读取客户端消息（设置短超时）
+                self.wfile._sock.settimeout(0.1)
+                try:
+                    msg = _ws_read_frame(self.rfile)
+                    if msg is None:
+                        break  # 客户端关闭
+                    if msg.get("type") == "close":
+                        break
+                    payload = msg.get("data")
+                    if payload:
+                        try:
+                            cmd = json.loads(payload)
+                            action = cmd.get("action", "")
+                            if action == "subscribe":
+                                events = cmd.get("events", [])
+                                subscribed_events.update(events)
+                            elif action == "unsubscribe":
+                                events = cmd.get("events", [])
+                                subscribed_events -= set(events)
+                            elif action == "ping":
+                                self.wfile.write(_ws_frame(json.dumps({"type": "pong"})))
+                                self.wfile.flush()
+                            elif action == "set_interval":
+                                push_interval = max(0.1, min(60.0, cmd.get("interval", 1.0)))
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                except socket.timeout:
+                    pass  # 无入站消息，继续推送
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    break  # 客户端断开
+
+                # 周期性推送
+                now = time.time()
+                if now - last_push >= push_interval:
+                    snapshot = self.api.stream_snapshot()
+                    snapshot["event"] = "world_state"
+                    if "audit" in subscribed_events:
+                        snapshot["audit"] = self.api.world.audit_summary()
+                    self.wfile.write(_ws_frame(json.dumps(snapshot, ensure_ascii=False)))
+                    self.wfile.flush()
+                    last_push = now
+
             self.wfile.write(_ws_close_frame())
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
