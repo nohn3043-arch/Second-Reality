@@ -63,6 +63,7 @@ from .spatial_sharding import ShardManager, HandoverProtocol
 from .aoi_sync import AoiTracker, SyncScheduler, DeltaSync
 from .partition_guard import PartitionGuard
 from .hierarchical_consensus import InterDcConsensus, IntraDcConsensus
+from .cluster import ClusterConfig, HeartbeatLoop, TransportDispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,39 @@ logger = logging.getLogger(__name__)
 #   redis    生产：账本本地 SQLite + 会话外置 Redis（需 redis-py，缺省降级）
 #   postgres 生产：账本预留 PG 驱动接口（当前降级 SQLite，分片路由已就绪）
 _STORAGE_BACKENDS = ("sqlite", "memory", "redis", "postgres")
+
+# 集群模式下的出站超时与重试。心跳探测必须快速失败：Windows 上目标端口
+# 无监听时连接会挂到超时而非立即 RST，5s × 1 次重试足以让一轮心跳卡 10s，
+# 故障检测因此完全失效。单机模式保持原默认（5s / 1 次重试）。
+_CLUSTER_SEND_TIMEOUT = 0.5
+_CLUSTER_SEND_RETRIES = 0
+
+
+def _split_endpoint(cluster: Optional[ClusterConfig]):
+    """把 "host:port" 拆成 (host, port)。非法或未声明时返回默认（127.0.0.1, 0）。
+
+    仅支持 IPv4 / 主机名 + 端口形态；IPv6 字面量不在静态清单支持范围内。
+    """
+    default = ("127.0.0.1", 0)
+    if cluster is None or not cluster.node_endpoint:
+        return default
+    host, _, port_str = cluster.node_endpoint.rpartition(":")
+    if not host:
+        return default
+    try:
+        return (host, int(port_str))
+    except ValueError:
+        logger.error("invalid node_endpoint=%s, fallback to random port",
+                     cluster.node_endpoint)
+        return (host, 0)
+
+
+def _endpoint_host(cluster: Optional[ClusterConfig]) -> str:
+    return _split_endpoint(cluster)[0]
+
+
+def _endpoint_port(cluster: Optional[ClusterConfig]) -> int:
+    return _split_endpoint(cluster)[1]
 
 
 def _resolve_storage_backend() -> str:
@@ -106,11 +140,17 @@ class World:
         world_id: str,
         data_dir: Optional[str] = None,
         initial_oracles: Optional[List[str]] = None,
+        cluster: Optional[ClusterConfig] = None,
     ):
+        # cluster=None → 单机形态：不监听、不探测、不广播，行为与接线前一致
+        self.cluster = cluster
+        self.local_dc = cluster.local_dc if cluster is not None else "dc_local"
         self.world_id = world_id
         # 节点身份（确定性全序的 tie-break 键）+ HLC 全局时钟
         self.node_id = world_id
         self.hlc = HybridLogicalClock(node_id=self.node_id)
+        # HLC 并发保护：tick 主线程与后台集群线程共用同一个时钟实例
+        self._hlc_lock = threading.Lock()
         # 空间索引（地基 A）：cell_key -> set(soul_hash)；positions: soul_hash -> [x, y, z]
         self.spatial: Dict[str, set] = {}
         self.positions: Dict[str, List[float]] = {}
@@ -121,11 +161,21 @@ class World:
         self.tick_budget = 1000        # 每 tick 全局步数上限
         self.tick_timeout_ms = 500     # 单 agent 超时 500ms
         # 地平线二：跨数据中心模块实例化
-        self.shard_manager = ShardManager(local_dc="dc_local")
+        self.shard_manager = ShardManager(local_dc=self.local_dc)
         self.shard_manager.init_default_shards()
         self.aoi_tracker = AoiTracker()
         self.aoi_sync = SyncScheduler()
         self.partition_guard = PartitionGuard(node_id=self.node_id)
+        # 跨 DC 复制面：远端节点 -> 上次推送给它的状态快照（用于下一轮差分）
+        self._remote_aoi_state: Dict[str, Dict] = {}
+        # 入站迁移记录（可审计：跨域 handover 是谁、从哪来、何时）
+        self._received_handovers: List[Dict] = []
+        # HLC 因果合流计数：每收到一条带时间戳的入站消息 +1。
+        # 不能用 hlc.state()["ll"] 判断合流——随后的 send() 会把 ll 清零。
+        self._hlc_merges = 0
+        # 入站分发白名单 + 后台心跳线程（cluster=None 时两者都不启用）
+        self._dispatcher = TransportDispatcher()
+        self.heartbeat_loop: Optional[HeartbeatLoop] = None
         # Intra-DC 快环先建，Inter-DC 慢环构注入同一个实例（避免双实例孤立）
         self.intra_consensus = IntraDcConsensus()
         self.interdc_consensus = InterDcConsensus(
@@ -167,17 +217,20 @@ class World:
         self.consensus = ConsensusNetwork(storage=self.storage)
         self.governance = Governance(network=self.consensus)
         # 缺点接通 2：TcpTransport 挂载到共识网络（地平线一 E，端点为静态清单）
+        # 监听地址必须与对外声明的端点一致：默认 port=0 会让内核随机分配，
+        # 与静态清单里的端口对不上，结果是对端永远连不上本节点。
         self.transport = TcpTransport(
             node_id=self.node_id,
+            host=_endpoint_host(self.cluster),
+            port=_endpoint_port(self.cluster),
             endpoint_resolver=lambda nid: self.consensus.endpoints.get(nid),
+            timeout=_CLUSTER_SEND_TIMEOUT if self.cluster is not None else 5.0,
+            retries=_CLUSTER_SEND_RETRIES if self.cluster is not None else 1,
         )
         self.consensus.set_transport(self.transport)
         # 缺点接通 3：AOI 增量复制器复用同一传输层推送跨 DC Delta
-        self.aoi_sync.set_push(
-            lambda target, payload: (
-                self.transport.send(target, payload) if self.transport else None
-            )
-        )
+        # 统一走 _send：所有出站消息共用同一出口，统一附加 HLC 时间戳与源节点
+        self.aoi_sync.set_push(self._send)
         self.memory_integrity = MemoryInalienability(vault=self.memory_vault)
         # 第2层：有状态会话（签名密钥经 KMS 抽象托管，可插拔 HSM）
         # 会话存储按 STORAGE 选择：memory -> 内存；redis -> Redis（缺省降级）；其余 -> SQLite
@@ -262,6 +315,245 @@ class World:
         self.genesis_completed = False
 
         self._bootstrap_genesis()
+        # 地平线二接线：创世完成后再接集群——Intra-DC 快环需要已注册的共识节点
+        self._wire_cluster()
+
+    # ---- 集群接线（地平线二：把五个跨 DC 模块接进运行时）----
+    def _wire_cluster(self) -> None:
+        """按 ClusterConfig 接通跨 DC 链路。
+
+        cluster 为 None 时直接返回，不改变任何单机行为。
+        """
+        if self.cluster is None:
+            return
+        cfg = self.cluster
+        # 1. 静态端点清单 + 共识节点注册：本节点 + 全部对端。
+        #    未注册为共识节点的对端收不到投票，也拿不到端点解析。
+        if cfg.node_endpoint:
+            self.consensus.attach_node(self.node_id, cfg.node_endpoint)
+            if self.node_id not in self.consensus.nodes:
+                self.consensus.register_node(self.node_id, endpoint=cfg.node_endpoint)
+        for nid, addr in cfg.peers.items():
+            self.consensus.attach_node(nid, addr)
+            if nid not in self.consensus.nodes:
+                self.consensus.register_node(nid, endpoint=addr)
+        # 2. Intra-DC 快环：注册本 DC 成员（未配置 DC 成员时退回全部已知节点）
+        local_nodes = cfg.local_nodes() or list(self.consensus.nodes.keys())
+        for nid in local_nodes:
+            self.intra_consensus.add_node(nid)
+        # 3. Inter-DC 慢环：注入 dc_id 与出站函数，登记各 DC 成员
+        self.interdc_consensus.epoch_manager.dc_id = cfg.local_dc
+        self.interdc_consensus.epoch_manager.set_transport(self._send)
+        self.interdc_consensus.register_dc(cfg.local_dc, local_nodes)
+        for dc_id in cfg.remote_dcs():
+            members = cfg.dc_nodes(dc_id)
+            self.interdc_consensus.register_dc(dc_id, members)
+            # DC 代表端点：让 dc_id 也可被解析成地址，供 epoch/handover 定向
+            if members and members[0] in self.consensus.endpoints:
+                self.consensus.attach_node(dc_id, self.consensus.endpoints[members[0]])
+        # 4. 分片归属：把配置中声明的分片指派给对应 DC
+        for dc_id, shard_ids in cfg.dc_shards.items():
+            for sid in shard_ids:
+                self.shard_manager.assign_shard(sid, dc_id)
+        # 5. 跨域迁移握手复用同一出站口
+        self.shard_manager.handover.set_transport(self._send)
+        # 6. 入站白名单（未注册 op 一律降级，不写状态）
+        self._register_transport_handlers()
+        # 7. 启动监听 + 后台心跳。心跳绝不放进 tick：会阻塞主循环
+        self.transport.set_callback(self._on_message)
+        try:
+            self.transport.start()
+        except OSError as e:
+            # 端口被占或地址不可用时降级为"不可达节点"，由分区容错兜底，
+            # 而不是让整个 World 构造失败——单机态退化不应拖垮本地世界。
+            logger.error(
+                "tcp listen failed endpoint=%s err=%s (running as unreachable node)",
+                cfg.node_endpoint, e,
+            )
+        self.heartbeat_loop = HeartbeatLoop(
+            consensus=self.consensus,
+            detector=self.partition_guard.detector,
+            send_fn=self._send,
+            interval_sec=cfg.heartbeat_interval_sec,
+            skip_node_id=self.node_id,
+        )
+        self.heartbeat_loop.start()
+        logger.info(
+            "cluster wired dc=%s node=%s endpoint=%s peers=%d remote_dcs=%d",
+            cfg.local_dc, self.node_id, cfg.node_endpoint,
+            len(cfg.peers), len(cfg.remote_dcs()),
+        )
+
+    def _send(self, node_id: str, payload: Dict) -> Optional[Dict]:
+        """统一出站口：附加 HLC 时间戳与源节点后交给传输层。
+
+        所有跨节点消息必须经此出口，否则对端无法做 HLC 因果合流。
+        """
+        if self.transport is None:
+            return None
+        if isinstance(payload, dict):
+            payload = dict(payload)
+            with self._hlc_lock:
+                payload.setdefault("hlc", self.hlc.send().to_dict())
+            payload["_from"] = self.node_id
+        return self.transport.send(node_id, payload)
+
+    def _on_message(self, source: str, payload: Dict) -> Dict:
+        """统一入站口：先做 HLC 因果合流，再交白名单分发。"""
+        try:
+            if isinstance(payload, dict) and isinstance(payload.get("hlc"), dict):
+                with self._hlc_lock:
+                    self.hlc.receive(HlcTimestamp.from_dict(payload["hlc"]))
+                    self._hlc_merges += 1
+        except Exception:  # pragma: no cover - 时钟合流失败不得影响消息处理
+            logger.exception("hlc receive failed source=%s", source)
+        return self._dispatcher.dispatch(source, payload)
+
+    def _register_transport_handlers(self) -> None:
+        """注册入站 op 白名单。
+
+        每个 handler 只做一件事：把入站载荷转成对既有模块的合法调用。
+        handler 不做鉴权决策——节点合法性由共识节点注册表把关。
+        """
+        d = self._dispatcher
+
+        def op_ping(source: str, payload: Dict) -> Dict:
+            return {"op": "pong", "node_id": self.node_id}
+
+        def op_vote(source: str, payload: Dict) -> Dict:
+            accepted = self.consensus.receive_vote(
+                str(payload.get("proposal_id", "")), source, bool(payload.get("approve"))
+            )
+            return {"op": "vote_ack", "accepted": accepted}
+
+        def op_aoi_delta(source: str, payload: Dict) -> Dict:
+            delta = payload.get("delta") or {}
+            data = delta.get("data") or {}
+            with self._lock:
+                for soul, state in data.items():
+                    pos = (state or {}).get("position")
+                    if isinstance(pos, list) and len(pos) == 3:
+                        self.aoi_tracker.track_remote(soul, pos)
+            return {"op": "aoi_ack", "bits": int(delta.get("bits", 0) or 0)}
+
+        def op_epoch_sync(source: str, payload: Dict) -> Dict:
+            self.interdc_consensus.receive_epoch(
+                str(payload.get("source_dc", "")),
+                int(payload.get("epoch_id", 0) or 0),
+                list(payload.get("proposals", []) or []),
+            )
+            return {"op": "epoch_ack", "epoch_id": payload.get("epoch_id", 0)}
+
+        def op_handover(source: str, payload: Dict) -> Dict:
+            soul = str(payload.get("soul", ""))
+            ctx = payload.get("context") or {}
+            accepted = False
+            with self._lock:
+                # 仅当本地确实持有该灵魂时才落位；否则只记录，拒绝凭空创生
+                if soul and soul in self.npcs:
+                    pos = ctx.get("position") or [0.0, 0.0, 0.0]
+                    if isinstance(pos, list) and len(pos) == 3:
+                        self._register_position(soul, pos)
+                        self.aoi_tracker.set_aoi(soul, pos)
+                        accepted = True
+                self._received_handovers.append(
+                    {
+                        "soul": soul,
+                        "from": source,
+                        "handover_id": payload.get("handover_id"),
+                        "accepted": accepted,
+                        "ts": time.time(),
+                    }
+                )
+            return {
+                "op": "handover_ack",
+                "soul": soul,
+                "handover_id": payload.get("handover_id"),
+                "accepted": accepted,
+            }
+
+        d.register("ping", op_ping)
+        d.register("vote", op_vote)
+        d.register("aoi_delta", op_aoi_delta)
+        d.register("epoch_sync", op_epoch_sync)
+        d.register("handover_transfer", op_handover)
+
+    def _probed_nodes(self) -> List[str]:
+        """参与 WAN 活性探测的节点清单（已注册且声明了端点，排除自身）。
+
+        创世占位节点没有端点，不能计入分区判定的分母——否则它们会被
+        恒定判为失活，把整个集群误判为分区。cluster=None 时维持原语义。
+        """
+        if self.cluster is None:
+            return list(self.consensus.nodes.keys())
+        return sorted(
+            n
+            for n in self.consensus.nodes
+            if n in self.consensus.endpoints and n != self.node_id
+        )
+
+    def _defer_cluster_sync(self, target_dcs: List[str]) -> None:
+        """把跨 DC 同步任务交给后台线程，tick 不等待任何网络往返。
+
+        epoch 广播与 AOI 增量都不在主循环上执行：单次连接超时 5s，
+        N 个对端最坏阻塞 5N 秒，会直接摧毁"本地 tick 不等 WAN"的前提。
+        """
+        if self.heartbeat_loop is None:
+            return
+        if target_dcs:
+            self.heartbeat_loop.submit(lambda: self._broadcast_epochs(target_dcs))
+        self.heartbeat_loop.submit(self._push_aoi_deltas)
+
+    def _broadcast_epochs(self, target_dcs: List[str]) -> None:
+        """向远端 DC 的成员节点广播已关闭的 epoch 摘要。"""
+        for dc_id in target_dcs:
+            for node_id in self.interdc_consensus._dc_nodes.get(dc_id, []):
+                self.interdc_consensus.sync_epochs(node_id)
+
+    def _push_aoi_deltas(self) -> None:
+        """按 AOI 关注域向各远端节点推送增量状态（带最小间隔节流）。"""
+        if self.cluster is None:
+            return
+        with self._lock:
+            local_state = {
+                s: {"position": self.positions.get(s, [0.0, 0.0, 0.0])}
+                for s in self.npcs
+            }
+        for node_id in self.cluster.peer_ids():
+            if node_id == self.node_id:
+                continue
+            if not self.aoi_sync.should_sync(node_id):
+                continue
+            last = self._remote_aoi_state.get(node_id, {})
+            delta = DeltaSync.diff(local_state, last)
+            if delta["bits"]:
+                touched = delta["added"] + delta["changed"]
+                delta["data"] = {s: dict(local_state[s]) for s in touched}
+                resp = self.aoi_sync.push_delta(node_id, delta)
+                if resp is not None:
+                    self._remote_aoi_state[node_id] = {
+                        k: dict(v) for k, v in local_state.items()
+                    }
+            self.aoi_sync.mark_synced(node_id)
+
+    def _begin_handover(
+        self, soul_hash: str, target_shard: Optional[str], target_dc: str, position: List[float]
+    ) -> Optional[str]:
+        """发起跨域迁移：锁定 → 传输 → 完成。传输失败则智能体留在源 DC。"""
+        ctx = {"position": list(position)}
+        hid = self.shard_manager.handover.initiate(
+            soul_hash, target_shard or "", target_dc, ctx
+        )
+        self.shard_manager.handover.lock(hid)
+        resp = self.shard_manager.handover.transfer(hid)
+        if resp is None:
+            logger.warning(
+                "handover failed hid=%s soul=%s target=%s (agent stays in source dc)",
+                hid, soul_hash, target_dc,
+            )
+            return None
+        self.shard_manager.handover.complete(hid)
+        return hid
 
     # ---- 创世装配 ----
     def _bootstrap_genesis(self) -> None:
@@ -361,8 +653,10 @@ class World:
             # Gas 预算：均分到各 agent，防止单个 agent 死循环/无限递归锁死线程
             per_agent = max(1, self.tick_budget // n) if n > 0 else self.tick_budget
             # 地平线二：分区检测 + 纪元推进
-            self.partition_guard.guard(list(self.consensus.nodes.keys()))
-            self.interdc_consensus.tick()
+            self.partition_guard.guard(self._probed_nodes())
+            epoch_sync = self.interdc_consensus.tick()
+            # 跨 DC 同步只入队，不在此处发任何网络包（否则 WAN 延迟进入 tick）
+            self._defer_cluster_sync(list(epoch_sync.get("target_dcs") or []))
             # 确定性全序：按 soul_hash 字典序，杜绝顺序漂移
             for soul in self._sorted_npcs():
                 agent = self.npcs[soul]
@@ -375,7 +669,8 @@ class World:
                     # Gas 耗尽 → 跳过该 agent（无状态副作用，保证不锁死线程）
                     action = "gas_exhausted"
                 seq += 1
-                hlcts = self.hlc.send()
+                with self._hlc_lock:
+                    hlcts = self.hlc.send()
                 event = {
                     "tick": clock,
                     "order_seq": seq,
@@ -454,6 +749,12 @@ class World:
                     "agent crossed shard soul=%s %s->%s",
                     soul_hash, prev_shard, new_shard,
                 )
+                # 只有跨数据中心才走握手协议。同 DC 内跨分片纯属本地索引变更，
+                # 若一并走 TCP 往返，本地移动会被自身的迁移流程拖垮。
+                prev_dc = self.shard_manager.owner_dc(prev)
+                new_dc = self.shard_manager.owner_dc(new_pos)
+                if prev_dc is not None and new_dc is not None and prev_dc != new_dc:
+                    self._begin_handover(soul_hash, new_shard, new_dc, new_pos)
         return True
 
     # ---- 缺点接通 4：脑裂恢复后的净态合并公开口 ----
@@ -560,7 +861,11 @@ class World:
         )
 
     def close(self) -> None:
-        """关闭世界，释放 SQLite 连接等底层资源。"""
+        """关闭世界：先停集群后台线程与监听，再释放存储资源。"""
+        if self.heartbeat_loop is not None:
+            self.heartbeat_loop.stop()
+        if self.cluster is not None and self.transport is not None:
+            self.transport.stop()
         self.session_store.close()
         self.storage.close()
 

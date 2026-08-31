@@ -26,3 +26,9 @@
 #   aoi_sync.py            AOI 关注域 + WAN 增量复制器
 #   partition_guard.py     网络分区检测 + 局部自治 + Merkle 差分合并
 #   hierarchical_consensus.py 分层双环共识（Intra-DC 快环 + Inter-DC 慢环）
+#   cluster.py              集群接线层：拓扑配置 + 后台心跳线程 + 入站 op 白名单
+#
+# 两套分片路由并存，职责不可混用（接线时务必分清）：
+#   ledger.ShardRouter           存储分片：按 soul_hash 路由账本（账户/凭证/会话）
+#   spatial_sharding.ShardRouter 仿真分片：按空间坐标路由实体（AOI / 跨域迁移）
+#   运行时（runtime.World）只用后者；前者由存储后端自行消费。

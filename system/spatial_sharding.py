@@ -230,6 +230,9 @@ class ShardManager:
             self.local_shards.add(shard_id)
             self.remote_shards.pop(shard_id, None)
         else:
+            # 分片不能同时归属本地与远端：不摘出本地集合会导致该分片
+            # 永远被判为本地所有，跨域迁移握手永不触发。
+            self.local_shards.discard(shard_id)
             self.remote_shards[shard_id] = dc_id
 
     def is_local(self, pos: List[float]) -> bool:
