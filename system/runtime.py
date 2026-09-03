@@ -13,6 +13,7 @@
 # 依赖方向：system/runtime.py -> constitution_rules / audit_engine / system.*（单向）
 # ============================================================
 
+import base64
 import json
 import logging
 import os
@@ -65,6 +66,11 @@ from .partition_guard import PartitionGuard
 from .hierarchical_consensus import InterDcConsensus, IntraDcConsensus
 from .cluster import ClusterConfig, HeartbeatLoop, TransportDispatcher
 from .edge_sdk import EdgeSdk
+from .account_abstraction import AccountAbstractionEngine
+from .key_rotation import KeyRotationManager
+from .soul_roaming import SoulRoamingProtocol
+from .identity_root import IdentityRoot
+from .keys import public_from_private
 
 logger = logging.getLogger(__name__)
 
@@ -249,16 +255,36 @@ class World:
             self.kms = CloudKmsProvider(key_dir=self.storage.data_dir)
         else:
             self.kms = FileKmsProvider(self.storage.data_dir)
+        # 会话签名密钥轮换（key_rotation 模块接线）：
+        #   签发走活跃密钥（惰性检查轮换周期）；验证按 token 内嵌 key_id
+        #   取密钥——retired 仍可验旧 token，revoked 即刻令其全部失效。
+        #   未注入 rotation 时回落 KMS 静态密钥（向后兼容）。
+        self.key_rotation = KeyRotationManager(storage=self.storage)
         self.sessions = SessionManager(
             storage=self.storage,
             kms_provider=self.kms,
             session_store=self.session_store,
+            key_rotation=self.key_rotation,
         )
         # 地平线三：AR 眼镜聚合端口（薄客户端接入层）
         #   眼镜 = 灵魂的"窗口"，只是六层账户里的一个设备凭证。
         #   世界 App 通过 world.edge 完成设备绑定 / 就近路由 / 视口订阅，
         #   无需理解跨 DC 内部细节（复用 credentials / sessions / sharding / aoi）。
         self.edge = EdgeSdk(self)
+        # 账户抽象（升级版账户层，account_abstraction 模块接线）：
+        #   主身份（灵魂私钥）只做"授权会话密钥"，日常操作由会话密钥
+        #   签名（额度 / 时效 / 范围三重约束），主私钥几乎不暴露。
+        self.account_abstraction = AccountAbstractionEngine(storage=self.storage)
+        # 灵魂漫游（soul_roaming 模块接线）：跨世界身份互认。
+        #   本世界签名密钥对由 KMS 托管的 32B 秘密派生（Ed25519），
+        #   不单独落盘私钥文件；世界公钥用于漫游证书的签发与验证。
+        _world_secret = self.kms.get_or_create_key("world_signing_key")
+        self.roaming = SoulRoamingProtocol(
+            world_id=self.world_id,
+            world_private_key=_world_secret,
+            world_public_key=public_from_private(_world_secret),
+            storage=self.storage,
+        )
         logger.info(
             "world initialized world_id=%s storage_backend=%s session_store=%s",
             self.world_id,
@@ -656,6 +682,9 @@ class World:
         """
         with self._lock:
             clock = self.temporal_substrate.tick()
+            # 账户抽象：低频维护——每 100 tick 清理一次过期会话密钥
+            if int(clock) % 100 == 0:
+                self.account_abstraction.cleanup_expired()
             events = []
             seq = self._event_seq
             n = len(self.npcs)
@@ -868,6 +897,35 @@ class World:
                 },
             }
         )
+
+    # ---- 身份根（第 0 层）----
+    def create_identity_root(
+        self, threshold: int = 3, num_shares: int = 5
+    ) -> Dict:
+        """为调用方生成身份根：主密钥对 + Shamir 分片。
+
+        服务端零落盘：主私钥在内存中生成、分片后立即丢弃（模块内保证），
+        公钥与全部分片一次性返回给调用方。调用方应离线分开保存分片，
+        凑齐 threshold 份可重建主私钥（shamir_combine）。
+        优先在设备端本地生成（identity_root.IdentityRoot）；
+        此接口服务无安全区的薄客户端（AR 眼镜等）。
+
+        返回：
+          {"master_public_key": b64, "soul_hash": 64hex,
+           "shares": [{"x": int, "y": hexstr}, ...],
+           "threshold": t, "num_shares": n}
+        """
+        root = IdentityRoot(threshold=threshold, num_shares=num_shares)
+        pubkey = root.generate()
+        return {
+            "master_public_key": base64.b64encode(pubkey).decode("ascii"),
+            "soul_hash": root.soul_hash,
+            "shares": [
+                {"x": x, "y": format(y, "x")} for x, y in root.shares
+            ],
+            "threshold": threshold,
+            "num_shares": num_shares,
+        }
 
     def close(self) -> None:
         """关闭世界：先停集群后台线程与监听，再释放存储资源。"""

@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
   <img src="assets/banner.png" alt="SPL-Virtual-World-Base banner" width="100%" />
 </div>
 
@@ -18,8 +18,15 @@
 ## ✦ About
 
 <p style="font-size: 16px; line-height: 1.9; color: #2F2F2F; margin: 0 0 24px;">
-  <strong>SPL-VIRTUAL-WORLD-BASE</strong> is an infrastructure framework for virtual worlds and the metaverse, built on a three-layer architecture of "Constitution — Law — Bridge." It provides a governable, interoperable, and evolvable runtime base for virtual spaces, enabling stable alignment of assets, rules, and agents across worlds. The Second Perspective Cognitive Auditor serves as the neutral referee of the entire stack.
+  <strong>SPL-VIRTUAL-WORLD-BASE</strong> is a runnable infrastructure base for virtual worlds and the metaverse, organized as a "Constitution — Law — Bridge" stack with a real implementation layer (<code>system/</code>) underneath. It delivers:
 </p>
+
+<ul>
+  <li><strong>An end-to-end account &amp; world runtime</strong> — persistent hash-chained ledger, ≥2/3 referendum consensus, need-driven agents, headless tick loop, REST + WebSocket API, and a multi-layer account system (credentials → sessions → tiered authorization → social recovery) wired together for real.</li>
+  <li><strong>The Second Perspective Cognitive Auditor</strong> as the neutral referee — a 19-dimension compliance review (including a functionally executed authentication-security dimension) that can be run on demand against any world instance.</li>
+  <li><strong>Geo-distributed readiness</strong> — hybrid logical clocks, spatial sharding with handover, AOI delta sync, partition guard with Merkle diff-merge, and hierarchical (intra-DC fast ring + inter-DC epoch) consensus, all speaking over real TCP and verified by a 3-node local cluster smoke test.</li>
+  <li><strong>AR / edge access</strong> — an Edge SDK for device-credential login, AOI viewport sync, and cross-DC relocation, plus roaming, account-abstraction and key-rotation modules.</li>
+</ul>
 
 <div align="center">
   <img src="assets/overview.png" alt="SPL-Virtual-World-Base overview" width="100%" />
@@ -42,19 +49,38 @@ cd Second-Reality
 
 # Python ≥3.8; core runtime requires only cryptography (Ed25519 signing)
 # pip install cryptography   # GUI demo additionally requires pygame
-# No GPU dependency, no database service dependency — runs on any hardware (see "Hardware Requirements & Deployment Topology")
-# Launch GUI demo (requires a graphical environment; two built-in agents)
+# No GPU dependency, no database service dependency — runs on any hardware
+
+# 1. Society simulation demo (standalone, in-memory; pygame GUI, 60×60 grid, 30 agents)
 python virtual_world.py
+
+# 2. Infrastructure verification (no GUI required)
+python smoke_test.py            # account/session/recovery security paths — ~1s
+python tools/cluster_smoke.py   # 3-node local geo-distributed cluster — ~14s
+python tools/edge_smoke.py      # AR edge access path — <1s
 ```
 
-### Programmatic Launch
+### Programmatic Launch (Reference World)
 
 ```python
-from virtual_world import NohnWorld, run_gui, run_headless
+from system.runtime import World
+from system.keys import generate_user_keypair, build_genesis_proof
+from system.ledger import derive_soul_hash
 
-nexus = NohnWorld()          # Built-in initial resources and two agents
-nexus.spawn_agent()          # Optional: spawn an additional agent
-run_headless(200, verbose=True)  # Headless simulation 200 ticks; use run_gui() if graphical env available
+world = World("my-world", data_dir="./my_data")
+device = generate_user_keypair()   # Private key stays on device, never uploaded
+genesis_proof = build_genesis_proof(device["secret"], {"genesis_id": "my-first-soul"})
+soul_hash = derive_soul_hash(genesis_proof)
+world.spawn_agent(soul_hash=soul_hash, genesis_proof=genesis_proof)
+world.tick()
+print(world.audit_summary())       # 19-dimension Second Perspective audit
+```
+
+### API Service
+
+```python
+from system.api import serve
+serve(world, host="0.0.0.0", port=8000)
 ```
 
 <p align="center">— ✦ —</p>
@@ -63,133 +89,114 @@ run_headless(200, verbose=True)  # Headless simulation 200 ticks; use run_gui() 
 
 <div style="max-width: 1100px; margin: 0 auto; padding: 0 16px; font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; color: #2b2b2b; line-height: 1.8;">
 
-The stack is divided into four separable layers, ensuring that rules (read-only), the auditor (neutral referee), the system (implementation), and the demo client never conflate:
+The stack keeps rules (read-only), the auditor (neutral referee), the implementation, and the demo strictly separated:
 
-- <strong>Constitution Rules</strong> (`constitution_rules.py`): Original axioms and ten governance laws, permanently locked as the root trust anchor. `NOHN_LAW_AXIOMS` is the single authoritative source for all constants.
-- <strong>Audit Engine</strong> (`audit_engine.py`): Second Perspective Cognitive Auditor (`ResponsibilityAccount` + pluggable `AuditPlugin` + `SecondPerspectiveAuditor`, with 19-dimension compliance review including authentication security). It is the referee, not part of the world.
-- <strong>Law</strong> (`law/`): Four standard layers: Communication Protocol Standard · Unified Global Economic Standard (currency, pegging, reserve proof, redemption) · Identity Proof Standard (soul hash bound identity, with V2.2 credential recovery clause) · Physics Baseline Standard (gravity / time / scale constants).
-- <strong>System</strong> (`system/`): Real implementation layer: persistent ledger, ≥2/3 referendum consensus, agent engine, headless runtime, REST/WS API, machine-readable protocol schema, six-layer account system (identity root / credentials / session / authorization / recovery / audit). All exposed state must pass the Second Perspective Auditor's 19-dimension compliance review.
-- <strong>Bridge</strong> (`compatibility_bridge.py`): The sole "customs checkpoint" for legacy worlds entering Nohn territory: `translate_intent()` semantic cleansing (removes implicit interpretation rights), `check_physics_constants()` physics constant verification, `verify_soul_hash()` soul hash identity verification.
+- <strong>Constitution Rules</strong> (`constitution_rules.py`): original axioms and ten governance laws, locked as the root trust anchor. `NOHN_LAW_AXIOMS` is the single authoritative source for shared constants (gravity, time dilation, unit scale, soul-hash length, oracle minimum sources).
+- <strong>Audit Engine</strong> (`audit_engine.py`): Second Perspective Cognitive Auditor — `ResponsibilityAccount` + pluggable `AuditPlugin` + `CognitiveAuditEngine` (counterfactual `reconstruct()`) + `SecondPerspectiveAuditor`. Runs a 19-dimension compliance review; the authentication-security dimension functionally executes the account stack in an isolated in-memory world rather than probing attributes.
+- <strong>Law</strong> (`law/`): four human-readable standards — Communication Protocol · Unified Global Economy (currency, pegging, reserve proof, redemption) · Identity Attestation (soul-hash-bound, with the V2.2 credential-recovery clause) · Physics Baseline. Their machine-readable JSON-Schema counterparts live in `system/protocol.py` and drive onboarding validation.
+- <strong>System</strong> (`system/`, 23 modules): the real implementation layer — ledger, consensus, agent engine, headless runtime, REST/WS API, protocol schema, account-system layers, geo-distributed subsystems, and edge access. See the module table below.
+- <strong>Bridge</strong> (`compatibility_bridge.py`): the customs checkpoint for legacy worlds entering Nohn territory — `translate_intent()` semantic cleansing, `check_physics_constants()` verification, `verify_soul_hash()` identity verification.
 
-### System Module Details
+### System Modules (23)
 
-`system/` is the runnable implementation carrier for the entire stack, adopting a progressive "stub-to-real" strategy to realize all constitutional contracts. The core runtime depends only on `cryptography` (Ed25519 signing); no database service dependency, no GPU dependency — storage backends (SQLite / Memory / Redis / PG) and key backends (file / cloud KMS) are all pluggable.
+Core runtime:
 
-| Module | Role | Core Capabilities | Persistence |
-|---|---|---|---|
-| `__init__.py` | Module entry | Defines system layer boundaries, constraints, and module planning | - |
-| `ledger.py` | State ledger | Soul hash attestation (lazy loading + pagination), world history hash chain, reserve proof ledger, world snapshots | SQLite (default `.world_data/` directory) |
-| `consensus.py` | Consensus network | Node registration (real signature verification), proposal referendum (≥2/3 supermajority), decentralized governance, genesis bootstrap exemption | Reuses ledger storage |
-| `agent_engine.py` | Agent engine | Need-driven agent decision-making, memory sealing/verification (KMS key), memory inalienability guarantee, state persistence | Reuses ledger storage |
-| `runtime.py` | Headless runtime | World genesis assembly, tick main loop, causal chain recording, snapshot persistence, 19-dimension audit reporting | Reuses ledger storage |
-| `protocol.py` | Interoperability protocol | Four legal standards as machine-readable JSON Schema, third-party implementation onboarding verification | - |
-| `api.py` | Service interface | REST service, stateful session authentication (revocable), account system routing, concurrency locks + rate limiting | Session state persisted |
-| `keys.py` | Key management | Ed25519 keys, Shamir secret sharing, KMS abstraction (file / cloud KMS pluggable), signing key loading | Key files on disk / cloud KMS托管 |
-| `identity_root.py` | Identity root (Layer 0) | Master identity keypair + Shamir(3,5) secret sharing, plaintext master private key generated then immediately cleared | - |
-| `credentials.py` | Credential layer (Layer 1) | One soul-bound multi-device credential (server stores only public keys), bind / revoke / verify | SQLite |
-| `session.py` | Authentication layer (Layer 2) | Stateful session: access token (15min) + refresh token (rotatable, revocable); session storage pluggable (SQLite / Memory / Redis) | SessionStore pluggable |
-| `authorization.py` | Authorization layer (Layer 3) | Tiered authorization (micro-instant / medium-delayed / large-multisig / extra-large-manual) + risk scoring | - |
-| `recovery.py` | Recovery layer (Layer 4) | Social recovery (3/5 guardian vote) + time lock (7-day cancellable) | SQLite |
+| Module | Role | Notes |
+|---|---|---|
+| `runtime.py` | World genesis assembly + tick loop + causal chain + snapshots | STORAGE backend selection |
+| `ledger.py` | Persistent ledger: soul / history hash chain / economy / snapshot + ShardRouter | SQLite (default), memory, PostgreSQL |
+| `consensus.py` | Proposal referendum (≥2/3 supermajority), governance, genesis bootstrap exemption | Real TCP transport |
+| `agent_engine.py` | Need-driven agent decisions + HMAC memory sealing + gas metering | Memory inalienability guarantee |
+| `api.py` | REST + WebSocket service, challenge-response auth, rate limiting | Pure standard library |
+| `protocol.py` | Four law standards as machine-readable JSON Schema + onboarding validator | — |
+| `keys.py` | Ed25519 keys, Shamir secret sharing, KMS abstraction (file / cloud) | — |
 
-**Multi-Backend Deployment (same codebase, three backends)**
+Account system:
 
-Select storage backend via `STORAGE` environment variable before running; default `sqlite`:
+| Module | Layer | Role |
+|---|---|---|
+| `credentials.py` | Credential (L1) | One soul, multi-device credentials (server stores public keys only) |
+| `session.py` | Authentication (L2) | Stateful access/refresh tokens, revocable; store pluggable (SQLite / Memory / Redis) |
+| `authorization.py` | Authorization (L3) | Tiered authorization (instant / delayed / multisig / manual) + risk scoring |
+| `recovery.py` | Recovery (L4) | Social recovery (3/5 guardian vote) + 7-day cancellable time lock |
+| `identity_root.py` | Identity root (L0) | Master keypair + Shamir(3,5) sharing; server-side helper for thin clients (`POST /identity/root/generate`, zero key material persisted) |
+| `account_abstraction.py` | Session keys (ERC-4337-style) | Session keys with spend-limit / expiry / action-scope constraints; daily operations signed by session keys via challenge-response — the master key stays offline (`/aa/*`) |
+| `key_rotation.py` | Key lifecycle | Server signing keys rotated on a schedule; tokens embed a key ID — retired keys keep verifying old tokens, revoked keys kill them instantly (`/keys/*`, wired into session signing) |
+
+Geo-distributed (wired into the runtime as the horizon-2 subsystem):
+
+| Module | Role |
+|---|---|
+| `hlc.py` | Hybrid logical clock — consistent cross-node event ordering |
+| `spatial_sharding.py` | Geographic shards + `ShardRouter` + migration handover protocol |
+| `aoi_sync.py` | Area-of-interest delta synchronization (`AoiTracker` / `DeltaSync` / `SyncScheduler`) |
+| `partition_guard.py` | Partition detection, local-autonomy degradation, Merkle diff-tree merge |
+| `hierarchical_consensus.py` | Intra-DC fast ring + inter-DC epoch slow ring (eventual consistency) |
+| `cluster.py` | Cluster wiring, heartbeat loop, inbound whitelist, transport dispatcher |
+
+Edge & roaming:
+
+| Module | Role |
+|---|---|
+| `edge_sdk.py` | AR-glasses access: device credential enrollment, challenge login, AOI viewport sync, nearest-DC routing, cross-DC relocation |
+| `soul_roaming.py` | Cross-world identity roaming: certificates signed by the source world, verified (signature + expiry + soul-hash derivation + optional user challenge-response) by the target world, with local soul mapping (`/roaming/*`; memory transfer channel still forthcoming) |
+
+**Multi-Backend Deployment (same codebase, four backends)**
+
+Select the storage backend via the `STORAGE` environment variable before running; default `sqlite`:
 
 | STORAGE | Ledger | Session | Use Case |
 |---|---|---|---|
 | `sqlite` (default) | On-disk SQLite (`.world_data/`) | Same database as ledger | Single machine / demo |
 | `memory` | In-process `:memory:` (no disk) | In-memory dict | Testing / stateless demo |
-| `redis` | Local SQLite | Redis (requires `pip install redis`, falls back to SQLite if absent) | Production horizontal scaling, multi-instance shared sessions |
-| `postgres` | Reserved PG driver (currently falls back to SQLite) | SQLite | Production large-scale ledger |
+| `redis` | Local SQLite | Redis (requires `pip install redis`; falls back to SQLite if absent) | Multi-instance shared sessions |
+| `postgres` | PostgreSQL via psycopg2 (DSN from `DATABASE_URL` or `pg_dsn`) | SQLite | Large-scale ledger — requires the driver, does not silently fall back |
 
 ```bash
-STORAGE=redis REDIS_URL=redis://cache:6379/0 python -m system.api   # Production example
+STORAGE=redis REDIS_URL=redis://cache:6379/0 python -m system.api            # scale-out
+STORAGE=postgres DATABASE_URL=postgresql://user:pass@db:5432/world python -m system.api
 ```
 
-Supporting deployment-level abstractions: `ShardRouter` (shard routing by `soul_hash`, default `SingleShardRouter` single shard), `SessionStore` (externalized session state), `CloudKmsProvider` (cloud KMS envelope encryption, auto-falls back to file backend when no cloud client injected). Multi-datacenter deployment simply lays out units by soul shard — no code changes required.
-
-**Core Features:**
-1. Low dependencies: Core runtime requires only `cryptography` (Ed25519 signing); GUI demo requires `pygame`; `redis` backend optional. No database service dependency, no GPU dependency — all storage and key backends are pluggable
-2. Full-chain auditability: All operations are traceable and verifiable, fully compliant with the Second Perspective Audit Engine's 19-dimension requirements
-3. Multi-implementation inter-recognition: Provides machine-readable protocol standards, supports third-party enterprises building self-developed implementations for network onboarding
-4. Production-grade security: Six-layer account system (identity root / credentials / session / authorization / recovery / audit), Shamir secret sharing, KMS key escrow, stateful revocable sessions, social recovery
-5. Horizontal scalability: Pluggable storage backends (SQLite / Memory / Redis / PG), shard routing interface ready, externalizable state — multi-datacenter deployment is configuration, not code changes
+Supporting deployment-level abstractions: `ShardRouter` (routing by `soul_hash`, default single shard), `SessionStore` (externalized session state), `CloudKmsProvider` (cloud KMS envelope encryption; falls back to the file backend when no cloud client is injected). Multi-datacenter deployment means laying out shard units — not code changes.
 
 **Hardware Requirements & Deployment Topology**
 
-Workload is pure CPU logical simulation (need state machine + SHA-256 hash chain + Ed25519 signing), with no matrix operations, no local LLM inference, no GPU dependency. Hardware threshold is extremely low — runs on anything from a Raspberry Pi to a multi-datacenter cluster; the difference is deployment topology, not code.
+Workload is pure CPU logical simulation (need state machine + SHA-256 hash chain + Ed25519 signing): no matrix operations, no local LLM inference, no GPU dependency. Runs on anything from a Raspberry Pi to a multi-datacenter cluster.
 
 | Tier | Scenario | Reference Hardware | Storage Backend |
 |---|---|---|---|
-| Minimum | Single-world demo / smoke_test / audit trail | 1 CPU core · 256MB–1GB RAM · tens of MB disk | `memory` / `sqlite` |
+| Minimum | Demo / smoke tests / audit trail | 1 CPU core · 256MB–1GB RAM | `memory` / `sqlite` |
 | Standard | Hundred-level agents + full 19-dimension audit | 2–4 cores · 2–4GB · SSD | `sqlite` |
-| Scale | Thousand-level agents / production multi-instance | 4–8 cores · 8–16GB · SSD · Redis | `redis` / `postgres` |
+| Scale | Thousand-level agents / production multi-instance | 4–8 cores · 8–16GB · SSD · Redis/PG | `redis` / `postgres` |
 
-- Compute bottleneck is not CPU: Single agent decision is constant time (need threshold mapping), world tick complexity is O(N) (N = agent count). The primary cost of scale growth is ledger and memory storage I/O and disk growth, not compute.
-- Multi-instance horizontal scaling: `STORAGE=redis` externalized sessions + `ShardRouter` sharding by `soul_hash` — multi-datacenter deployment is configuration, not code changes.
-- The only path that introduces external compute is LLM augmentation (via external API, local requires only network); the local core remains low-configuration.
-
-The demo runtime (`virtual_world.py`) assembles the above layers with `EconomySystem`, `TaskGenerator`, `NohnAgent`, mounted on the real `system.World`.
+- Single agent decision is constant time; world tick is O(N) (N = agent count). The cost of scale is ledger I/O and disk growth, not compute.
+- The only path that introduces external compute is LLM augmentation (via external API); the local core stays low-configuration.
 
 </div>
 
 <p align="center">— ✦ —</p>
 
-## ✦ Core Modules
+## ✦ Demo & Verification
 
 <div style="max-width: 1100px; margin: 0 auto; padding: 0 16px;">
 
-Grouped by the six layers of the Nohn™ World Stack (all classes verified against current source code):
+**Society Simulation Demo** (`virtual_world.py`) — a standalone, in-memory society simulation that demonstrates the agent and economic dynamics of the stack. It runs independently of `system/` (no infrastructure required):
 
-| Layer | Module (Class) | Responsibility |
+- 60×60 grid world, 30 initial agents, 80 resource nodes, 8 buildings
+- Need-driven agents (five-level need model) with perceive → think → act loops and STM→LTM memory consolidation
+- Economy with periodic UBI (every 10 ticks), wealth tax (every 30), inflation (every 50), and a wealth hard-cap rule
+- `run_gui()` renders the live world with pygame (pause / speed control / agent inspection); `run_headless(n)` runs n ticks and prints statistics plus a compliance score
+
+**Verification scripts** (all currently pass):
+
+| Script | Scope | Runtime |
 |---|---|---|
-| **Constitution** | `SpatialSubstrate` | World topology, dimensions, boundaries, minimal units |
-|  | `TemporalSubstrate` | Time flow and event ordering |
-|  | `CausalClosure` | Causal chain tracking, external intervention detection |
-|  | `ExistenceAxiom` | Entity creation, verification, and destruction |
-|  | `GenesisCondition` | World initialization and integrity verification |
-|  | `ImmutableWorldRule` | Rules modifiable only via global referendum |
-|  | `WorldCentralBrain` | Central coordination of world subsystems |
-| **Soul** | `SoulAttestation` | Soul registration and verification |
-|  | `SoulLedger` | Identity ledger |
-|  | `MemoryInalienability` | Memory inalienability |
-|  | `MemoryGuardian` | Memory sealing and tamper detection |
-|  | `IndependentWill` | Autonomous will (MARL-based, not behavior tree) |
-|  | `MemoryVault` | Secure memory storage |
-| **Audit** | `ResponsibilityAccount` | Named accountability for each governance action |
-|  | `AuditPlugin` | Pluggable audit checks |
-|  | `CognitiveAuditEngine` | Cognitive audit engine core |
-|  | `SecondPerspectiveAuditor` | Comprehensive compliance review |
-|  | `DecentralizationGovernance` | Decentralized governance |
-|  | `AestheticCompliance` | Aesthetic / rendering compliance |
-|  | `AuditReport` | Structured audit reports |
-| **Perpetuity** | `WorldPerpetuity` | Eternal world runtime records |
-|  | `HistoryLedger` | History ledger |
-|  | `SnapshotRegistry` | Snapshot registration and recovery |
-| **Interoperability** | `NohnCompatibilityBridge` | Cross-world bridging protocol |
-|  | `MandatoryInteroperability` | Mandatory interoperability protocol |
-|  | `UniversalVocabulary` | Universal semantic vocabulary |
-|  | `PhysicsBaseline` | Physics baseline alignment |
-|  | `IdentityProtocol` | Identity protocol compatibility |
-|  | `EconomicBaseline` | Economic standard compliance |
-| **Runtime** | `NohnWorld` | World container |
-|  | `NohnAgent` | Agent |
-|  | `EconomySystem` | Economic system |
-|  | `TaskGenerator` | Task generation |
-|  | `NohnVisualApp` | Visualization application |
-|  | `ConsensusEngine` | World participant consensus |
-|  | `SimulationEngine` | World simulation loop |
-| **System** | `World` (`system/runtime.py`) | Genesis assembly + tick loop + 19-dimension audit + snapshots + account system six-layer assembly |
-|  | `Storage` · `SoulLedger` · `HistoryLedger` · `EconomicReserve` · `SnapshotRegistry` (`system/ledger.py`) | Persistent SQLite ledger (soul / history / economy / snapshot / credentials / session / recovery) |
-|  | `ConsensusNetwork` · `Governance` (`system/consensus.py`) | ≥2/3 referendum consensus + governance + genesis bootstrap exemption |
-|  | `Agent` (`system/agent_engine.py`) | Need-driven agent + memory sealing + state persistence |
-|  | `IdentityRoot` (`system/identity_root.py`) | Identity root + Shamir secret sharing |
-|  | `CredentialVault` (`system/credentials.py`) | Multi-device credential management |
-|  | `SessionManager` (`system/session.py`) | Stateful revocable sessions |
-|  | `AuthorizationEngine` (`system/authorization.py`) | Tiered authorization + risk engine |
-|  | `RecoveryManager` (`system/recovery.py`) | Social recovery + time lock |
-|  | `ProtocolValidator` (`system/protocol.py`) | Machine-readable law validation + network onboarding |
-|  | `SoulAuth` · `WorldAPI` (`system/api.py`) | REST + stateful session authentication + account system routing |
+| `smoke_test.py` | Genesis proof → soul hash, challenge-response signing, session issuance, per-device revocation, auth-security audit, shard router, recovery pollution checks | ~1s |
+| `tools/cluster_smoke.py` | 3-node local cluster: heartbeat, epoch broadcast, AOI replication, HLC convergence, migration handover, partition degradation & recovery | ~14s |
+| `tools/edge_smoke.py` | Edge device: credential enrollment, challenge login, AOI viewport deltas, nearest-DC routing, cross-DC relocation, revocation | <1s |
+| `tools/wiring_smoke.py` | Account abstraction (session-key issue → challenge → execute → constraints → revoke), key rotation (retired verifies / revoked kills tokens), identity root (Shamir 3-of-5 recovery), soul roaming (issue → tamper rejection → verify → map) | ~2s |
+
+**Expert Review Reports** (`expert_report.py`) — exports the auditor's machine-readable verdicts plus ledger hash anchors as a locally reproducible Markdown report (see `reports/`). The report itself is a display layer; every anchor (hash / verdict) points back to re-runnable primitives, so reviewers never need to trust the report.
 
 </div>
 
@@ -199,11 +206,11 @@ Grouped by the six layers of the Nohn™ World Stack (all classes verified again
 
 <div style="max-width: 1100px; margin: 0 auto; padding: 0 16px;">
 
-This base is a <strong>protocol guardian + reference implementation</strong>, not a single-operator platform. Enterprises can integrate in three ways:
+This base is a <strong>protocol guardian + reference implementation</strong>, not a single-operator platform. Three integration paths:
 
 ### A. Protocol Participant (Self-hosted, Data Stays Local)
 
-Run a self-developed implementation compliant with the four `law/` standards in your own data center. Validate before onboarding:
+Run a self-developed implementation compliant with the four standards. Validate before onboarding:
 
 ```python
 from system.protocol import ProtocolValidator
@@ -212,34 +219,15 @@ ok, failures = ProtocolValidator().validate(world_config)
 # ok=False -> Isolated at the failed layer
 ```
 
-<strong>Hard constraint</strong>: Raw data (souls, assets, memories, world state) never leaves the data center. The protocol layer only exchanges verifiable proofs — hashes, signatures, Merkle roots, reserve proofs — never raw data.
+<strong>Hard constraint</strong>: raw data (souls, assets, memories, world state) never leaves the data center. The protocol layer only exchanges verifiable proofs — hashes, signatures, Merkle roots, reserve proofs.
 
 ### B. Reference Implementation (Embedded)
 
-Directly use the audited reference world:
-
-```python
-from system.runtime import World
-from system.keys import generate_user_keypair, build_genesis_proof
-from system.ledger import derive_soul_hash
-
-world = World("my-world", data_dir="./my_data")
-device = generate_user_keypair()   # Private key stays in device secure enclave (memory), never uploaded
-genesis_proof = build_genesis_proof(device["secret"], {"genesis_id": "my-first-soul"})
-soul_hash = derive_soul_hash(genesis_proof)   # = SHA-256(public_key)
-world.spawn_agent(soul_hash=soul_hash, genesis_proof=genesis_proof)
-world.tick()
-print(world.audit_summary())   # 19-dimension Second Perspective audit
-```
+Use the audited reference world directly — see "Programmatic Launch" above. Private keys stay in the device's memory; the ledger stores only public keys and hashes.
 
 ### C. API Integration (REST + WebSocket)
 
-```python
-from system.api import serve
-serve(world, host="0.0.0.0", port=8000)
-```
-
-Key endpoints: `GET /health`, `GET /world`, `GET /audit`, `POST /protocol/validate`, `POST /agent/spawn`, `POST /auth/issue`, `POST /auth/refresh`, `POST /auth/revoke`, `GET/POST /credentials/*`, `POST /recovery/*`, `GET/POST /economy/*`.
+Key endpoints: `GET /health`, `GET /world`, `POST /world/tick`, `GET /world/snapshot`, `GET /audit`, `GET /audit/full`, `POST /agent/spawn`, `POST /protocol/validate`, `/auth/*` (challenge → issue → refresh → revoke, delayed-operation approve/cancel/process), `/credentials/*` (bind / list / revoke), `/aa/*` (account abstraction: session-key issue / list / revoke / challenge / execute), `/keys/*` (signing-key list / rotate / revoke), `POST /identity/root/generate`, `/roaming/*` (world register / certificate issue / verify / map / mapping lookup), `/recovery/*` (initiate / guardian/add / approve / cancel / finalize), `/economy/*` (por / issue / deposit / redeem), and the persistent WebSocket stream `/ws/world`.
 
 </div>
 
@@ -249,37 +237,39 @@ Key endpoints: `GET /health`, `GET /world`, `GET /audit`, `POST /protocol/valida
 
 ```text
 Second-Reality/
-├── constitution_rules.py        # Constitution rules: axioms + ten governance laws + NOHN_LAW_AXIOMS
-├── audit_engine.py              # Second Perspective Auditor: 19-dimension compliance review (incl. auth security)
+├── constitution_rules.py        # Constitution: axioms + ten governance laws + NOHN_LAW_AXIOMS
+├── audit_engine.py              # Second Perspective Auditor: 19-dimension compliance review
 ├── constitution.py              # Aggregation layer (backward-compatible re-exports)
-├── compatibility_bridge.py      # Legacy world "customs": semantic cleansing + physics / soul verification
-├── virtual_world.py             # Demo runtime (GUI / headless), mounted on system.World
-├── _build_vw*.py                # Virtual world build script series
-├── _gen*.py                     # Content generation script series
-├── _write_vw.py                 # World writing tool
-├── package.json                 # Node.js dependencies (documentation generation tools)
-├── system/                      # Real implementation layer
-│   ├── __init__.py
-│   ├── ledger.py                #   Persistent ledger (Soul/History/Economic/credentials/session/recovery) + ShardRouter + memory backend
-│   ├── consensus.py             #   ≥2/3 referendum consensus + governance + genesis bootstrap exemption
-│   ├── agent_engine.py          #   Need-driven agent + memory sealing + state persistence
-│   ├── runtime.py               #   Genesis assembly + tick loop + 19-dimension audit + account system assembly (STORAGE backend selection)
-│   ├── api.py                   #   REST + stateful session auth + account system routing + rate limiting
+├── compatibility_bridge.py      # Legacy world "customs": semantic / physics / soul verification
+├── virtual_world.py             # Society simulation demo (standalone, pygame GUI / headless)
+├── smoke_test.py                # Account & session security verification
+├── expert_report.py             # Expert review report export (auditor verdicts + hash anchors)
+├── system/                      # Real implementation layer (23 modules)
+│   ├── runtime.py               #   Genesis assembly + tick loop + STORAGE selection
+│   ├── ledger.py                #   Persistent ledger + ShardRouter + PG/memory backends
+│   ├── consensus.py             #   ≥2/3 referendum consensus + governance
+│   ├── agent_engine.py          #   Need-driven agent + memory sealing
+│   ├── api.py                   #   REST + WS + challenge-response auth + rate limiting
 │   ├── protocol.py              #   Machine-readable law schema + validator
-│   ├── keys.py                  #   Signing key management + Shamir secret sharing + KMS abstraction (file / CloudKmsProvider)
-│   ├── identity_root.py         #   Identity root (Layer 0): master key + Shamir secret sharing
-│   ├── credentials.py           #   Credential layer (Layer 1): multi-device credential management
-│   ├── session.py               #   Authentication layer (Layer 2): stateful revocable session (SessionStore pluggable)
-│   ├── authorization.py         #   Authorization layer (Layer 3): tiered authorization + risk engine
-│   └── recovery.py              #   Recovery layer (Layer 4): social recovery + time lock
-├── law/                         # Communication / Economic / Identity / Physics standards
-├── tools/                       # Tool scripts
-│   ├── gen_gcae_doc.js          #   GCAE document generator
-│   ├── md2pdf.py                #   Markdown to PDF tool
-│   └── updated_rules.md         #   Rules update log
-├── docs/                        # Technical documentation
-│   ├── audit_engine_vs_safety_benchmarks.md  # Audit engine safety benchmark report
-│   └── audit_engine_vs_safety_benchmarks.pdf # PDF version
+│   ├── keys.py                  #   Ed25519 + Shamir + KMS abstraction
+│   ├── credentials.py           #   Account L1: multi-device credentials
+│   ├── session.py               #   Account L2: stateful revocable sessions
+│   ├── authorization.py         #   Account L3: tiered authorization + risk engine
+│   ├── recovery.py              #   Account L4: social recovery + time lock
+│   ├── identity_root.py         #   Account L0: master key + Shamir (server-side thin-client helper)
+│   ├── account_abstraction.py   #   Session keys with spend/expiry/scope constraints (/aa/*)
+│   ├── key_rotation.py          #   Server signing-key rotation, wired into session tokens (/keys/*)
+│   ├── hlc.py                   #   Hybrid logical clock
+│   ├── spatial_sharding.py      #   Geo sharding + migration handover
+│   ├── aoi_sync.py              #   AOI delta synchronization
+│   ├── partition_guard.py       #   Partition detection + Merkle diff-merge
+│   ├── hierarchical_consensus.py#   Intra-DC fast ring + inter-DC epoch
+│   ├── cluster.py               #   Cluster wiring + heartbeat + dispatcher
+│   ├── edge_sdk.py              #   AR / edge device access SDK
+│   └── soul_roaming.py          #   Cross-world roaming certificates + soul mapping (/roaming/*)
+├── law/                         # Communication / Economic / Identity / Physics standards (text)
+├── tools/                       # cluster_smoke / edge_smoke / doc generation utilities
+├── reports/                     # Exported expert review reports
 ├── assets/                      # banner.svg/png, overview.svg/png
 ├── .gitignore
 ├── LICENSE

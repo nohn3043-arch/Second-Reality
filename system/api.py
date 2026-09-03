@@ -46,6 +46,10 @@ _PUBLIC_ROUTES = {
     ("POST", "/auth/issue"),
     ("GET", "/protocol/schemas"),
     ("POST", "/protocol/validate"),
+    # 账户抽象：会话密钥自主鉴权（挑战-响应签名），无需主身份 token——
+    # 主私钥不在线是账户抽象的设计前提。key_id 本身不泄密。
+    ("POST", "/aa/challenge"),
+    ("POST", "/aa/execute"),
 }
 
 
@@ -567,6 +571,211 @@ class WorldAPI:
                 return 403, {"error": "恢复未就绪：时间锁未到期或票数不足"}
             return 200, {"credential_id": credential_id}
 
+        # ---- 账户抽象（升级版账户层：会话密钥授权日常操作）----
+        if method == "POST" and path == "/aa/keys/issue":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            pubkey_b64 = body.get("public_key", "")
+            try:
+                base64.b64decode(pubkey_b64)
+            except Exception:
+                return 400, {"error": "public_key 必须为 base64 编码的会话密钥公钥"}
+            actions = body.get("allowed_actions")
+            if actions is not None and not isinstance(actions, list):
+                return 400, {"error": "allowed_actions 必须为字符串数组"}
+            sk = self.world.account_abstraction.issue_session_key(
+                soul_hash=soul,
+                public_key_b64=pubkey_b64,
+                spend_limit=_safe_float(body.get("spend_limit")) or None,
+                duration_seconds=body.get("duration_seconds"),
+                allowed_actions=set(actions) if actions else None,
+            )
+            return 201, sk.to_dict()
+        if method == "GET" and path == "/aa/keys":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            keys = self.world.account_abstraction.list_session_keys(
+                soul, include_inactive=True
+            )
+            return 200, {"session_keys": [k.to_dict() for k in keys]}
+        if method == "POST" and path == "/aa/keys/revoke":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            if body.get("all"):
+                count = self.world.account_abstraction.revoke_all_session_keys(soul)
+                return 200, {"revoked_all": True, "count": count}
+            key_id = body.get("key_id", "")
+            ok = self.world.account_abstraction.revoke_session_key(key_id, soul)
+            return (200 if ok else 404), {"revoked": ok}
+        if method == "POST" and path == "/aa/challenge":
+            # 公开路由：会话密钥持有者凭私钥签 nonce 自证（主身份不在线）
+            key_id = body.get("key_id", "")
+            sk = self.world.account_abstraction.get_session_key(key_id)
+            if sk is None:
+                return 404, {"error": "session key not found"}
+            nonce = self.auth.issue_challenge(key_id, ip=client_ip)
+            if nonce is None:
+                return 429, {"error": "too many attempts, please try again later"}
+            return 200, {"key_id": key_id, "nonce": nonce, "ttl": 300}
+        if method == "POST" and path == "/aa/execute":
+            # 公开路由：nonce 挑战签名 + 三重约束（额度/时效/范围）校验
+            key_id = body.get("key_id", "")
+            sk = self.world.account_abstraction.get_session_key(key_id)
+            if sk is None:
+                return 404, {"error": "session key not found"}
+            try:
+                sk_pubkey = base64.b64decode(sk.public_key_b64)
+            except Exception:
+                return 500, {"error": "session key pubkey corrupt"}
+            if not self.auth.verify_challenge(
+                key_id, body.get("nonce", ""), body.get("signature", ""), sk_pubkey
+            ):
+                return 403, {"error": "会话密钥挑战校验失败：签名无效或 nonce 已用"}
+            action = body.get("action", "")
+            amount = _safe_float(body.get("amount", 0)) or 0.0
+            valid, reason, _ = self.world.account_abstraction.validate_session_key(
+                key_id, action, amount
+            )
+            if not valid:
+                return 403, {"error": reason}
+            self.world.account_abstraction.consume_session_key(key_id, amount)
+            sk = self.world.account_abstraction.get_session_key(key_id)
+            return 200, {
+                "executed": True,
+                "action": action,
+                "amount": amount,
+                "spent_amount": sk.spent_amount,
+                "remaining_limit": max(0.0, sk.spend_limit - sk.spent_amount),
+                "status": sk.status,
+            }
+
+        # ---- 服务端签名密钥轮换（key_rotation 管理）----
+        # 注：当前无角色权限模型，任何登录灵魂可调用；生产部署应叠加
+        # 管理员角色门禁（待 authorization 层扩展）。
+        if method == "GET" and path == "/keys":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            keys = self.world.key_rotation.list_keys(include_revoked=True)
+            return 200, {"keys": [k.to_dict() for k in keys]}  # 不含密钥材料
+        if method == "POST" and path == "/keys/rotate":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            rk = self.world.key_rotation.rotate()
+            return 200, {"rotated": rk.to_dict()}
+        if method == "POST" and path == "/keys/revoke":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            key_id = body.get("key_id", "")
+            ok = self.world.key_rotation.revoke_key(key_id)
+            if not ok:
+                return 404, {"error": "key not found"}
+            return 200, {
+                "revoked": True,
+                "note": "该密钥签发的全部 access token 即刻失效",
+            }
+
+        # ---- 身份根（第 0 层：主密钥 + Shamir 分片）----
+        if method == "POST" and path == "/identity/root/generate":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            try:
+                result = self.world.create_identity_root(
+                    threshold=int(body.get("threshold", 3)),
+                    num_shares=int(body.get("num_shares", 5)),
+                )
+            except ValueError as e:
+                return 400, {"error": str(e)}
+            result["warning"] = (
+                "分片经网络返回，仅适用于无安全区的薄客户端；"
+                "有能力时应在本设备本地生成（identity_root.IdentityRoot）。"
+                "请离线分开保存各分片。"
+            )
+            return 200, result
+
+        # ---- 灵魂漫游（跨世界身份互认）----
+        if method == "POST" and path == "/roaming/worlds/register":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            world_id = body.get("world_id", "")
+            pubkey_b64 = body.get("public_key", "")
+            if not world_id:
+                return 400, {"error": "world_id 必填"}
+            try:
+                pubkey = base64.b64decode(pubkey_b64)
+            except Exception:
+                return 400, {"error": "public_key 必须为 base64 编码"}
+            self.world.roaming.register_world(world_id, pubkey)
+            return 201, {"registered": world_id}
+        if method == "POST" and path == "/roaming/certificates":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            target_world_id = body.get("target_world_id", "")
+            if not target_world_id:
+                return 400, {"error": "target_world_id 必填"}
+            pubkey = self.world.soul_ledger.get_pubkey(soul)
+            if pubkey is None:
+                return 403, {"error": "灵魂无注册公钥，无法签发漫游证书"}
+            cert = self.world.roaming.issue_roaming_certificate(
+                soul_hash=soul,
+                target_world_id=target_world_id,
+                identity_proof={
+                    "pubkey_b64": base64.b64encode(pubkey).decode("ascii"),
+                    "soul_hash_in_source": soul,
+                },
+                memory_manifest=body.get("memory_manifest"),
+                ttl_seconds=body.get("ttl_seconds"),
+            )
+            return 201, {"certificate": cert.to_dict()}
+        if method == "POST" and path == "/roaming/verify":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            cert_dict = body.get("certificate")
+            if not isinstance(cert_dict, dict):
+                return 400, {"error": "certificate 必填（证书字典）"}
+            try:
+                from .soul_roaming import SoulRoamingCertificate
+
+                cert = SoulRoamingCertificate.from_dict(cert_dict)
+            except (KeyError, TypeError):
+                return 400, {"error": "证书结构不完整"}
+            sig_b64 = body.get("challenge_signature", "")
+            nonce = body.get("challenge_nonce", "")
+            valid, reason = self.world.roaming.verify_roaming_certificate(
+                cert,
+                user_challenge_signature=base64.b64decode(sig_b64) if sig_b64 else None,
+                challenge_nonce=nonce.encode("utf-8") if nonce else None,
+            )
+            return 200, {"valid": valid, "reason": reason}
+        if method == "POST" and path == "/roaming/map":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            cert_dict = body.get("certificate")
+            local_soul_hash = body.get("local_soul_hash", "")
+            if not isinstance(cert_dict, dict) or not local_soul_hash:
+                return 400, {"error": "certificate 与 local_soul_hash 必填"}
+            if local_soul_hash != soul:
+                return 403, {"error": "仅可映射到本人本地灵魂"}
+            try:
+                from .soul_roaming import SoulRoamingCertificate
+
+                cert = SoulRoamingCertificate.from_dict(cert_dict)
+            except (KeyError, TypeError):
+                return 400, {"error": "证书结构不完整"}
+            valid, reason = self.world.roaming.verify_roaming_certificate(cert)
+            if not valid:
+                return 403, {"error": f"证书验证失败：{reason}"}
+            self.world.roaming.map_roaming_soul(cert, local_soul_hash)
+            return 201, {"mapped": True}
+        if method == "POST" and path == "/roaming/mapping/lookup":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            local = self.world.roaming.get_local_soul_hash(
+                body.get("source_world_id", ""), body.get("source_soul_hash", "")
+            )
+            if local is None:
+                return 404, {"error": "no mapping found"}
+            return 200, {"local_soul_hash": local}
+
         # ---- 互认协议 ----
         if method == "GET" and path == "/protocol/schemas":
             from .protocol import SCHEMAS
@@ -779,4 +988,4 @@ def serve(
     server.serve_forever()
 
 
-__all__ = ["WorldAPI", "SoulAuth", "serve"]
+__all__ = ["WorldAPI", "ChallengeManager", "serve"]

@@ -175,6 +175,7 @@ class SessionManager:
         session_store: SessionStore = None,
         access_ttl: int = 900,
         refresh_ttl: int = 604800,
+        key_rotation=None,
     ):
         # 向后兼容：未显式传 session_store 时，包装传入的 storage 为 SQLite 后端
         if session_store is None:
@@ -188,6 +189,11 @@ class SessionManager:
         self._kms = kms_provider
         self.access_ttl = access_ttl
         self.refresh_ttl = refresh_ttl
+        # 可选：服务端签名密钥轮换（key_rotation.KeyRotationManager）。
+        #   签发走活跃密钥并内嵌 key_id；验证按 key_id 取密钥——
+        #   retired 仍可验旧 token，revoked 即刻令其全部失效。
+        #   None 时回落 KMS 静态密钥（原行为，向后兼容）。
+        self._key_rotation = key_rotation
 
     def get_session_id(self, refresh_hash: str):
         """按 refresh 哈希查 session_id（三种后端通吃，审计/管理接口用）。"""
@@ -195,10 +201,31 @@ class SessionManager:
         return entry[0] if entry else None
 
     def _signing_key(self) -> bytes:
+        """取当前签名密钥：轮换管理器激活时走活跃密钥（惰性检查轮换周期）。"""
+        if self._key_rotation is not None:
+            self._key_rotation.rotate_if_needed()
+            return self._key_rotation.get_active_key().key_bytes
         return self._kms.get_or_create_key("session_signing_key")
 
     def _sign(self, payload: bytes) -> bytes:
         return hmac.new(self._signing_key(), payload, hashlib.sha256).digest()
+
+    def _verify_sig(self, payload: bytes, sig: bytes, key_id: str = "") -> bool:
+        """按 token 内嵌 key_id 选择验证密钥。
+
+        - 带 key_id：从轮换管理器取（retired 可验，revoked 拒绝）
+        - 无 key_id（旧版 token）：用当前签名密钥验证
+        """
+        if key_id and self._key_rotation is not None:
+            rk = self._key_rotation.get_key_for_verification(key_id)
+            if rk is None:
+                return False  # 密钥已吊销或不存在：该密钥签发的 token 全部失效
+            key_bytes = rk.key_bytes
+        else:
+            key_bytes = self._signing_key()
+        return hmac.compare_digest(
+            hmac.new(key_bytes, payload, hashlib.sha256).digest(), sig
+        )
 
     def issue(self, soul_hash: str, pubkey_fingerprint: str = ""):
         """签发 access + refresh。返回 (access_token, refresh_token)。
@@ -214,6 +241,9 @@ class SessionManager:
         payload_dict = {"soul": soul_hash, "exp": exp}
         if pubkey_fingerprint:
             payload_dict["pkfp"] = pubkey_fingerprint
+        if self._key_rotation is not None:
+            # 内嵌签名密钥 ID：验证端据此选择验证密钥（支持轮换后验旧 token）
+            payload_dict["kid"] = self._key_rotation.get_active_key().key_id
         payload = json.dumps(payload_dict, sort_keys=True).encode("utf-8")
         access_token = (
             base64.urlsafe_b64encode(payload).decode("ascii")
@@ -251,11 +281,12 @@ class SessionManager:
             sig = base64.urlsafe_b64decode(sig_b64.encode("ascii"))
         except Exception:
             return None
-        if not hmac.compare_digest(self._sign(payload), sig):
-            return None
+        # 先解析 payload 再验签：签名密钥 ID（kid）在 payload 内
         try:
             data = json.loads(payload.decode("utf-8"))
         except Exception:
+            return None
+        if not self._verify_sig(payload, sig, key_id=data.get("kid", "")):
             return None
         if data.get("exp", 0) < time.time():
             return None
