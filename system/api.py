@@ -571,6 +571,29 @@ class WorldAPI:
                 return 403, {"error": "恢复未就绪：时间锁未到期或票数不足"}
             return 200, {"credential_id": credential_id}
 
+        # 恢复警报（第4层增强：恢复发起时通知守护者+关联设备）
+        if method == "GET" and path == "/recovery/alerts":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            # 仅本人可查自己的恢复警报（防信息泄露）
+            alerts = [
+                a for a in self.world._recovery_alerts
+                if a["soul_hash"] == soul
+            ]
+            return 200, {"alerts": alerts, "count": len(alerts)}
+        if method == "DELETE" and path == "/recovery/alerts":
+            if soul is None:
+                return 401, {"error": "authentication required"}
+            # 已读后清除本人的警报（按 request_id 精确清除）
+            request_id = body.get("request_id", "")
+            before = len(self.world._recovery_alerts)
+            self.world._recovery_alerts = [
+                a for a in self.world._recovery_alerts
+                if not (a["soul_hash"] == soul and a["request_id"] == request_id)
+            ]
+            removed = before - len(self.world._recovery_alerts)
+            return 200, {"removed": removed}
+
         # ---- 账户抽象（升级版账户层：会话密钥授权日常操作）----
         if method == "POST" and path == "/aa/keys/issue":
             if soul is None:

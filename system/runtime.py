@@ -208,6 +208,24 @@ class World:
             storage=self.storage,
             credential_vault=self.credentials,
         )
+        # 恢复警报回调：发起恢复时记录到内存警报队列，供关联设备轮询/推送
+        # （恢复发起瞬间通知所有守护者 + 关联设备，时间锁内可撤销）
+        self._recovery_alerts: list = []
+
+        def _on_recovery_alert(request_id, soul_hash, guardians, timelock_until):
+            self._recovery_alerts.append({
+                "request_id": request_id,
+                "soul_hash": soul_hash,
+                "guardians": guardians,
+                "timelock_until": timelock_until,
+                "alerted_at": time.time(),
+            })
+            logger.info(
+                "recovery alert recorded request_id=%s soul_hash=%s guardians=%d",
+                request_id, soul_hash, len(guardians),
+            )
+
+        self.recovery.register_alert_callback(_on_recovery_alert)
         # 第3层授权，依赖恢复层查询守护者列表
         self.authorization = AuthorizationEngine(
             storage=self.storage,
