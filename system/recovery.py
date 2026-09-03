@@ -2,18 +2,29 @@
 
 社交恢复 + 时间锁。化解 non_revocable 与「丢钥匙=资产永久冻结」的矛盾：
 灵魂不可撤销，但凭证可安全更换。
+
+增强（阶段1）：
+- 恢复发起时全设备警报：通知所有守护者 + 关联设备，时间锁内任何关联设备可撤销
+- 可插拔通知回调：webhook / push / 邮件，由上层注入
 """
 
 import base64
 import logging
 import time
 import uuid
+from typing import Callable, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# 恢复警报回调签名：(request_id, soul_hash, guardian_souls, timelock_until) -> None
+RecoveryAlertCallback = Callable[[str, str, List[str], float], None]
+
 
 class RecoveryManager:
-    """社交恢复：N 守护者 M 同意 + 时间锁（延迟期可取消）。"""
+    """社交恢复：N 守护者 M 同意 + 时间锁（延迟期可取消）。
+
+    增强：恢复发起时触发全设备警报回调；时间锁内任何已绑定凭证的设备可撤销。
+    """
 
     def __init__(
         self,
@@ -26,7 +37,27 @@ class RecoveryManager:
         self._credentials = credential_vault
         self.guardian_threshold = guardian_threshold
         self.timelock_seconds = timelock_seconds
+        self._alert_callbacks: List[RecoveryAlertCallback] = []
 
+    # ── 警报回调注册 ──────────────────────────────────────────
+    def register_alert_callback(self, callback: RecoveryAlertCallback) -> None:
+        """注册恢复警报回调（webhook/push/邮件等）。"""
+        self._alert_callbacks.append(callback)
+
+    def _fire_recovery_alert(self, request_id: str, soul_hash: str, timelock_until: float) -> None:
+        """触发所有恢复警报回调。"""
+        guardians = self.get_guardians(soul_hash)
+        for cb in self._alert_callbacks:
+            try:
+                cb(request_id, soul_hash, guardians, timelock_until)
+            except Exception as e:
+                logger.warning("recovery alert callback failed: %s", e)
+        logger.info(
+            "recovery ALERT fired request_id=%s soul_hash=%s guardians=%d callbacks=%d",
+            request_id, soul_hash, len(guardians), len(self._alert_callbacks),
+        )
+
+    # ── 守护者管理 ────────────────────────────────────────────
     def add_guardian(self, soul_hash: str, guardian_soul: str) -> bool:
         """添加守护者。"""
         self._storage.execute(
@@ -42,18 +73,22 @@ class RecoveryManager:
         )
         return [r[0] for r in rows]
 
+    # ── 恢复流程 ──────────────────────────────────────────────
     def initiate_recovery(self, soul_hash: str, new_public_key_b64: str) -> str:
-        """发起恢复：创建请求，进入时间锁。返回 request_id。"""
+        """发起恢复：创建请求，进入时间锁，触发全设备警报。返回 request_id。"""
         request_id = uuid.uuid4().hex
         now = time.time()
+        timelock_until = now + self.timelock_seconds
         self._storage.execute(
             "INSERT INTO recovery_requests "
             "(request_id, soul_hash, new_public_key, created_at, timelock_until, status) "
             "VALUES (?, ?, ?, ?, ?, 'pending')",
-            (request_id, soul_hash, new_public_key_b64, now, now + self.timelock_seconds),
+            (request_id, soul_hash, new_public_key_b64, now, timelock_until),
         )
         logger.info("recovery initiated request_id=%s soul_hash=%s timelock=%ds",
                      request_id, soul_hash, self.timelock_seconds)
+        # 触发全设备警报（守护者 + 关联设备）
+        self._fire_recovery_alert(request_id, soul_hash, timelock_until)
         return request_id
 
     def approve_recovery(self, request_id: str, guardian_soul: str) -> bool:
@@ -82,13 +117,23 @@ class RecoveryManager:
         )
         return rows[0][0] if rows else 0
 
-    def cancel_recovery(self, request_id: str) -> bool:
-        """原设备在时间锁内取消。"""
+    def cancel_recovery(self, request_id: str, soul_hash: Optional[str] = None) -> bool:
+        """原设备在时间锁内取消。增强：任何已绑定该灵魂的设备均可撤销。
+
+        如果传入 soul_hash，验证该灵魂确实有已绑定凭证（关联设备撤销）。
+        """
+        if soul_hash:
+            # 验证该灵魂有已绑定凭证（即有关联设备）
+            creds = self._credentials.get_credentials(soul_hash)
+            if not creds:
+                logger.warning("cancel_recovery rejected: soul_hash=%s has no bound credentials", soul_hash)
+                return False
         self._storage.execute(
             "UPDATE recovery_requests SET status='cancelled' "
             "WHERE request_id=? AND status='pending'",
             (request_id,),
         )
+        logger.info("recovery cancelled request_id=%s by soul_hash=%s", request_id, soul_hash or "unknown")
         return True
 
     def finalize_recovery(self, request_id: str):

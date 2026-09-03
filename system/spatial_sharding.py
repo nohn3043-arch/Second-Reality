@@ -225,7 +225,11 @@ class ShardManager:
         self.router.set_default("shard_0_0_0")
 
     def assign_shard(self, shard_id: str, dc_id: str) -> None:
-        """将分片分配给某 DC。"""
+        """将分片分配给某 DC。
+
+        除更新归属集合外，还必须同步更新路由表里该分片对象的 dc_id——
+        否则 router.dc_of() 永远读到初始 dc_local，就近路由形同虚设。
+        """
         if dc_id == self.local_dc:
             self.local_shards.add(shard_id)
             self.remote_shards.pop(shard_id, None)
@@ -234,6 +238,10 @@ class ShardManager:
             # 永远被判为本地所有，跨域迁移握手永不触发。
             self.local_shards.discard(shard_id)
             self.remote_shards[shard_id] = dc_id
+        # 同步路由表：GeoShard.dc_id 是 dc_of 的唯一读源，必须随分配更新
+        shard = self.router.shard_info(shard_id)
+        if shard is not None:
+            shard.dc_id = dc_id
 
     def is_local(self, pos: List[float]) -> bool:
         """位置是否属于本节点负责的分片。"""

@@ -64,6 +64,7 @@ from .aoi_sync import AoiTracker, SyncScheduler, DeltaSync
 from .partition_guard import PartitionGuard
 from .hierarchical_consensus import InterDcConsensus, IntraDcConsensus
 from .cluster import ClusterConfig, HeartbeatLoop, TransportDispatcher
+from .edge_sdk import EdgeSdk
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +254,11 @@ class World:
             kms_provider=self.kms,
             session_store=self.session_store,
         )
+        # 地平线三：AR 眼镜聚合端口（薄客户端接入层）
+        #   眼镜 = 灵魂的"窗口"，只是六层账户里的一个设备凭证。
+        #   世界 App 通过 world.edge 完成设备绑定 / 就近路由 / 视口订阅，
+        #   无需理解跨 DC 内部细节（复用 credentials / sessions / sharding / aoi）。
+        self.edge = EdgeSdk(self)
         logger.info(
             "world initialized world_id=%s storage_backend=%s session_store=%s",
             self.world_id,

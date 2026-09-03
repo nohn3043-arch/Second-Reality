@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import secrets
+import select
 import socket
 import struct
 import threading
@@ -115,7 +116,9 @@ def _ws_read_frame(rfile) -> Optional[Dict]:
         if opcode == 0x1:  # text
             return {"type": "text", "data": payload.decode("utf-8", errors="replace")}
         return {"type": "unknown", "data": None}
-    except (socket.timeout, OSError):
+    except socket.timeout:
+        raise  # 超时向上抛出，由调用方 except socket.timeout 处理（不视为断开）
+    except OSError:
         return None
 
 
@@ -664,36 +667,41 @@ class _Handler(BaseHTTPRequestHandler):
             last_push = 0.0
 
             while True:
-                # 非阻塞读取客户端消息（设置短超时）
-                self.wfile._sock.settimeout(0.1)
+                # 非阻塞检查客户端是否有数据可读（select 超时 0.1s）
+                # 用 select 而非 socket.settimeout，彻底区分"超时无数据"和"连接断开"
                 try:
-                    msg = _ws_read_frame(self.rfile)
-                    if msg is None:
-                        break  # 客户端关闭
-                    if msg.get("type") == "close":
-                        break
-                    payload = msg.get("data")
-                    if payload:
-                        try:
-                            cmd = json.loads(payload)
-                            action = cmd.get("action", "")
-                            if action == "subscribe":
-                                events = cmd.get("events", [])
-                                subscribed_events.update(events)
-                            elif action == "unsubscribe":
-                                events = cmd.get("events", [])
-                                subscribed_events -= set(events)
-                            elif action == "ping":
-                                self.wfile.write(_ws_frame(json.dumps({"type": "pong"})))
-                                self.wfile.flush()
-                            elif action == "set_interval":
-                                push_interval = max(0.1, min(60.0, cmd.get("interval", 1.0)))
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-                except socket.timeout:
-                    pass  # 无入站消息，继续推送
-                except (BrokenPipeError, ConnectionResetError, OSError):
-                    break  # 客户端断开
+                    readable, _, _ = select.select([self.connection], [], [], 0.1)
+                except (OSError, ValueError):
+                    break  # socket 已关闭
+                if readable:
+                    try:
+                        msg = _ws_read_frame(self.rfile)
+                        if msg is None:
+                            break  # 客户端关闭（read 返回空）
+                        if msg.get("type") == "close":
+                            break
+                        payload = msg.get("data")
+                        if payload:
+                            try:
+                                cmd = json.loads(payload)
+                                action = cmd.get("action", "")
+                                if action == "subscribe":
+                                    events = cmd.get("events", [])
+                                    subscribed_events.update(events)
+                                elif action == "unsubscribe":
+                                    events = cmd.get("events", [])
+                                    subscribed_events -= set(events)
+                                elif action == "ping":
+                                    self.wfile.write(_ws_frame(json.dumps({"type": "pong"})))
+                                    self.wfile.flush()
+                                elif action == "set_interval":
+                                    push_interval = max(0.1, min(60.0, cmd.get("interval", 1.0)))
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                    except socket.timeout:
+                        pass  # 无入站消息，继续推送
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        break  # 客户端断开
 
                 # 周期性推送
                 now = time.time()
