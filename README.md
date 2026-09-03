@@ -229,6 +229,16 @@ Use the audited reference world directly — see "Programmatic Launch" above. Pr
 
 Key endpoints: `GET /health`, `GET /world`, `POST /world/tick`, `GET /world/snapshot`, `GET /audit`, `GET /audit/full`, `POST /agent/spawn`, `POST /protocol/validate`, `/auth/*` (challenge → issue → refresh → revoke, delayed-operation approve/cancel/process), `/credentials/*` (bind / list / revoke), `/aa/*` (account abstraction: session-key issue / list / revoke / challenge / execute), `/keys/*` (signing-key list / rotate / revoke), `POST /identity/root/generate`, `/roaming/*` (world register / certificate issue / verify / map / mapping lookup), `/recovery/*` (initiate / guardian/add / approve / cancel / finalize), `/economy/*` (por / issue / deposit / redeem), and the persistent WebSocket stream `/ws/world`.
 
+<strong>⚠ Production Hardening Notice</strong> — this is a reference implementation, not a turnkey production deployment. Before exposing any instance, operators MUST apply their own hardening. Known gaps an integrator is expected to close:
+
+<ul>
+  <li><strong>Admin gating on privileged endpoints</strong>: <code>/keys/rotate</code> and <code>/keys/revoke</code> currently require only an authenticated soul — no role model exists yet. Gate them at your reverse proxy (IP allowlist / mTLS) or extend the authorization layer with an admin role. Un-gated, a malicious authenticated soul could rotate server keys (disruption) or revoke the active key (mass session invalidation).</li>
+  <li><strong>Cluster transport security</strong>: the inter-node TCP transport has no TLS and no node authentication — a node that can reach the cluster port can inject votes. Restrict cluster ports to a private network segment or front them with a VPN/mesh.</li>
+  <li><strong>Key storage backend</strong>: the default KMS is a plain file backend (and <code>key_rotation</code> stores key material in the ledger database). For production, inject a real KMS client into <code>CloudKmsProvider</code> and back <code>KeyRotationManager</code> with it.</li>
+  <li><strong>Proxy trust</strong>: the API trusts <code>X-Forwarded-For</code> for rate limiting — only run it behind a trusted proxy, or clients can spoof source IPs.</li>
+</ul>
+
+
 </div>
 
 <p align="center">— ✦ —</p>
