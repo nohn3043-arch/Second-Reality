@@ -314,11 +314,20 @@ class World:
         self.spatial_substrate = SpatialSubstrate()
         self.spatial_substrate.define_topology("Euclidean", 3, "Infinite", 1e-3)
         self.temporal_substrate = TemporalSubstrate()
-        self.temporal_substrate.granularity = 1.0  # 1 tick = 1 秒
+        self.temporal_substrate.define_temporal_properties("forward", 1.0, NOHN_LAW_AXIOMS["time_dilation"])
         self.causal_closure = CausalClosure()
         self.existence_axiom = ExistenceAxiom()
         self.genesis_condition = GenesisCondition()
         self.immutable_rule = ImmutableWorldRule()
+        self.immutable_rule.set_physics_constants({
+            "gravity": NOHN_LAW_AXIOMS["gravity"],
+            "time_dilation": NOHN_LAW_AXIOMS["time_dilation"],
+            "unit_scale": NOHN_LAW_AXIOMS["unit_scale"],
+            "element_reactions": {
+                ("fire", "water"): "evaporation",
+                ("fire", "electro"): "overload"
+            }
+        })
         self.central_brain = WorldCentralBrain()
         self.aesthetic = AestheticCompliance()
         self.soul_attestation = SoulAttestation()
@@ -340,12 +349,7 @@ class World:
             "unknown_downgraded": True,
             "vocab_mapped": True,
         }
-        self.physics = {
-            "gravity": NOHN_LAW_AXIOMS["gravity"],
-            "time_dilation": NOHN_LAW_AXIOMS["time_dilation"],
-            "unit_scale": NOHN_LAW_AXIOMS["unit_scale"],
-            "no_dimensional_inflation": NOHN_LAW_AXIOMS["no_dimensional_inflation"],
-        }
+        self.physics = dict(self.immutable_rule.physics_constants)
         # 并网审查配置（interoperability.on_board_world 四维度）
         self.world_config = {
             "world_id": self.world_id,

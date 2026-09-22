@@ -44,11 +44,14 @@ except ImportError:
 # ============================================================
 
 NOHN_LAW_AXIOMS = {
-    # 物理基准（law/Physics baseline standard）——单一权威来源
-    "gravity": 9.80665,          # 重力加速度（m/s^2）
-    "time_dilation": 1.0,        # 时间膨胀系数（1.0 = 与现实同速，禁止加速引流）
-    "unit_scale": "metric",      # 公制单位制
-    "no_dimensional_inflation": True,  # 禁止数值膨胀式引流
+    # 物理基准默认参考值（law/Physics baseline standard）
+    # 注意：这些是创世时的参考默认值，不是强制地球值。
+    # 每个虚拟世界在创世时自行设定物理常数，设定后不可更改（治理公理一）。
+    # 修改已设定的物理常数必须通过 ≥2/3 全球公投（propose_amendment）。
+    "gravity": 9.80665,          # 默认重力加速度参考值（m/s^2）——世界可自定义
+    "time_dilation": 1.0,        # 默认时间膨胀系数参考值——世界可自定义
+    "unit_scale": "metric",      # 默认单位制参考值——世界可自定义
+    "no_dimensional_inflation": True,  # 禁止数值膨胀式引流（此项为硬约束，不可关闭）
     # 身份确权（law/Identity attestation standard）
     "soul_hash_bits": 256,       # SHA-256 / 64 hex
     "soul_hash_len": 64,
@@ -124,15 +127,38 @@ class SpatialSubstrate:
 # ============================================================
 
 class TemporalSubstrate:
-    """虚拟世界的时间基板——定义方向、粒度、全局时钟"""
+    """虚拟世界的时间基板——定义方向、粒度、全局时钟。创世时设定，此后不可更改。"""
 
-    def __init__(self):
-        self.direction = "forward"          # 时间方向：forward（严格不可逆）
-        self.granularity = None             # 时间最小粒度（秒/tick）
-        # 时间膨胀系数：与 law 物理基准对齐（1.0 = 与现实同速，禁止加速引流）
-        self.time_dilation = NOHN_LAW_AXIOMS["time_dilation"]
+    def __init__(self, direction: str = "forward",
+                 granularity: Optional[float] = None,
+                 time_dilation: Optional[float] = None):
+        self.direction = direction            # 时间方向：forward（严格不可逆）
+        self.granularity = granularity        # 时间最小粒度（秒/tick），创世时设定
+        # 时间膨胀系数：未注入时使用 NOHN_LAW_AXIOMS 参考默认值
+        self.time_dilation = time_dilation if time_dilation is not None else NOHN_LAW_AXIOMS["time_dilation"]
         self.time_dilation_enabled = (self.time_dilation != 1.0)  # 是否允许时间膨胀
-        self.global_clock = 0               # 世界自创世以来的全局时钟计数器
+        self.global_clock = 0                 # 世界自创世以来的全局时钟计数器
+        self._temporal_locked = False         # 创世后锁定为 True
+
+    def define_temporal_properties(self, direction: str, granularity: float,
+                                   time_dilation: float) -> bool:
+        """
+        在创世时设定本世界的时间属性。此后不可直接更改。
+        设定后 self._temporal_locked 置为 True，后续直接调用此方法将返回 False。
+        已锁定的属性修改必须通过 ImmutableWorldRule.propose_amendment（收集用户意见 + ≥2/3 公投）进行。
+        """
+        if self._temporal_locked:
+            return False
+        if direction not in ("forward",):
+            return False  # 硬约束：时间方向只允许 forward（不可逆）
+        if granularity is not None and granularity <= 0:
+            return False
+        self.direction = direction
+        self.granularity = granularity
+        self.time_dilation = time_dilation
+        self.time_dilation_enabled = (time_dilation != 1.0)
+        self._temporal_locked = True
+        return True
 
     def tick(self) -> int:
         """推进世界时间一步。返回新的全局时钟值。不可回退。"""
@@ -368,38 +394,67 @@ class GenesisCondition:
 # ============================================================
 
 class ImmutableWorldRule:
-    """任何世界的核心物理/逻辑规则，一经设定，永不更改"""
-    
-    def __init__(self):
+    """任何世界的核心物理/逻辑规则，一经创世设定，永不更改"""
+
+    def __init__(self, physics_constants: Optional[Dict] = None):
         # 世界宪法 - 写入智能合约
         self.world_constitution = SmartContract(owner="genesis")
-        # 核心物理参数 - 写入ROM/系统层
-        self.physics_constants = {
-            # 物理常数一律引用宪法授权的单一权威来源，不再散落硬编码
-            "gravity": NOHN_LAW_AXIOMS["gravity"],              # 不可更改
-            "time_dilation": NOHN_LAW_AXIOMS["time_dilation"],  # 不可更改
-            "unit_scale": NOHN_LAW_AXIOMS["unit_scale"],        # 不可更改
-            "element_reactions": {     # 火+水=蒸发，不可更改
+        # 核心物理参数——创世时由世界创建者注入，此后不可更改
+        # 未注入时使用 NOHN_LAW_AXIOMS 参考默认值
+        defaults = {
+            "gravity": NOHN_LAW_AXIOMS["gravity"],
+            "time_dilation": NOHN_LAW_AXIOMS["time_dilation"],
+            "unit_scale": NOHN_LAW_AXIOMS["unit_scale"],
+            "element_reactions": {
                 ("fire", "water"): "evaporation",
                 ("fire", "electro"): "overload"
             }
         }
+        self.physics_constants = physics_constants if physics_constants else defaults
+        self._physics_locked = False  # 创世后锁定为 True
         self.rule_modification_log = []  # 任何"尝试修改"的记录
-    
+
+    def set_physics_constants(self, constants: Dict) -> bool:
+        """
+        在创世时设定本世界的物理常数。此后不可直接更改。
+        设定后 self._physics_locked 置为 True，后续直接调用此方法将返回 False。
+        已锁定的常数修改必须通过 propose_amendment（收集用户意见 + ≥2/3 公投）进行。
+        """
+        if self._physics_locked:
+            return False
+        required_keys = ["gravity", "time_dilation", "unit_scale", "element_reactions"]
+        for key in required_keys:
+            if key not in constants:
+                return False
+        # no_dimensional_inflation 是硬约束，无论世界设定如何均强制为 True
+        constants["no_dimensional_inflation"] = True
+        self.physics_constants = constants
+        self._physics_locked = True
+        return True
+
     def propose_amendment(self, proposed_change: Dict, proposer: str) -> bool:
-        """建议修改规则？可以。但必须满足条件"""
-        # 条件1：需要2/3以上"公民"同意
+        """
+        建议修改已设定的物理常数或核心规则？可以。但必须满足条件：
+        1. 收集用户意见——需要 ≥2/3 全球公投同意
+        2. 任何修改必须"分叉"新世界，不能在原世界打补丁
+        """
+        # 条件1：收集用户意见，需要2/3以上"公民"同意
         approval_rate = self._global_referendum(proposed_change)
         if approval_rate < CONSENSUS_THRESHOLD:
             self.rule_modification_log.append({
                 "proposal": proposed_change,
                 "status": "rejected",
-                "reason": "insufficient consensus"
+                "reason": "insufficient consensus (user vote below 2/3)"
             })
             return False
-        
+
         # 条件2：任何修改必须"分叉"，不能"补丁"
         self._fork_world(proposed_change)
+        self.rule_modification_log.append({
+            "proposal": proposed_change,
+            "status": "approved_via_fork",
+            "approval_rate": approval_rate
+        })
         return True
     
     def _global_referendum(self, change):
@@ -482,11 +537,28 @@ class MemoryVault:
 # ============================================================
 
 class AestheticCompliance:
-    """美学合规检查器 - 所有视觉资产必须通过审计"""
-    
-    def __init__(self):
-        self.allowed_color_palette = self._generate_bright_palette()
-        self.forbidden_filters = ["dark_dystopian", "horror", "decay"]
+    """美学合规检查器 - 所有视觉资产必须通过审计。美学标准创世时设定，此后不可更改。"""
+
+    def __init__(self, forbidden_filters: Optional[List[str]] = None,
+                 allowed_color_palette: Optional[List] = None):
+        # 美学标准由世界创建者在创世时设定，未注入时使用默认值
+        self.allowed_color_palette = allowed_color_palette if allowed_color_palette is not None else self._generate_bright_palette()
+        self.forbidden_filters = forbidden_filters if forbidden_filters is not None else ["dark_dystopian", "horror", "decay"]
+        self._aesthetic_locked = False  # 创世后锁定为 True
+
+    def define_aesthetic_rules(self, forbidden_filters: List[str],
+                               allowed_color_palette: List) -> bool:
+        """
+        在创世时设定本世界的美学标准。此后不可直接更改。
+        设定后 self._aesthetic_locked 置为 True，后续直接调用此方法将返回 False。
+        已锁定的美学标准修改必须通过 ImmutableWorldRule.propose_amendment（收集用户意见 + ≥2/3 公投）进行。
+        """
+        if self._aesthetic_locked:
+            return False
+        self.forbidden_filters = forbidden_filters
+        self.allowed_color_palette = allowed_color_palette
+        self._aesthetic_locked = True
+        return True
 
     @staticmethod
     def _generate_bright_palette():
@@ -796,18 +868,22 @@ class UniversalVocabulary:
 
 
 class PhysicsBaseline:
-    """物理常数基准 - 统一重力学、时空尺度、要素反应（对齐 NOHN_LAW_AXIOMS）"""
+    """物理常数基准 - 验证并网世界是否与其自身创世时设定的物理常数一致"""
 
     def aligned(self, physics: Dict) -> bool:
-        """验证重力、时间流速、单位制是否与公理对齐"""
-        if abs(physics.get("gravity", 0) - NOHN_LAW_AXIOMS["gravity"]) >= 1e-4:
+        """
+        验证该世界的物理常数是否自洽：
+        - 必须显式声明 gravity、time_dilation、unit_scale（值由世界自定，不强制地球值）
+        - no_dimensional_inflation 是硬约束，必须为 True
+        """
+        if "gravity" not in physics:
             return False
-        if physics.get("time_dilation", 1.0) != NOHN_LAW_AXIOMS["time_dilation"]:
+        if "time_dilation" not in physics:
             return False
-        if physics.get("unit_scale", "") != NOHN_LAW_AXIOMS["unit_scale"]:
+        if "unit_scale" not in physics:
             return False
         if not physics.get("no_dimensional_inflation", False):
-            return False
+            return False  # 硬约束：禁止数值膨胀式引流，不可关闭
         return True
 
 

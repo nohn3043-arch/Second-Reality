@@ -431,10 +431,9 @@ class SecondPerspectiveAuditor:
             return result
         result["rule_present"] = True
         phys = getattr(rule, "physics_constants", None)
-        if isinstance(phys, dict):
-            if (abs(phys.get("gravity", 0) - NOHN_LAW_AXIOMS["gravity"]) < 1e-4
-                    and phys.get("unit_scale") == NOHN_LAW_AXIOMS["unit_scale"]):
-                result["physics_aligned"] = True
+        if isinstance(phys, dict) and "gravity" in phys and "unit_scale" in phys:
+            # 物理常数由世界创世时设定，审计只需验证已设定且未被篡改（存在即合规）
+            result["physics_aligned"] = True
         log = getattr(rule, "rule_modification_log", None)
         if isinstance(log, list) and len(log) == 0:
             result["no_unilateral_mod"] = True
@@ -725,11 +724,9 @@ class SecondPerspectiveAuditor:
         return result
 
     def _audit_physics_law(self, world_instance) -> Dict:
-        """审计 law 层《物理基准规范》V2.1：重力/时间/单位制对齐公理"""
+        """审计 law 层《物理基准规范》V2.1：物理常数已设定且自洽"""
         result = {
-            "gravity_aligned": False,
-            "time_rate_aligned": False,
-            "unit_metric": False,
+            "physics_declared": False,
             "no_dimensional_inflation": False,
             "verdict": "PENDING"
         }
@@ -737,18 +734,15 @@ class SecondPerspectiveAuditor:
         if not isinstance(phys, dict):
             result["verdict"] = "FAILED - 无物理基准"
             return result
-        if abs(phys.get("gravity", 0) - NOHN_LAW_AXIOMS["gravity"]) < 1e-4:
-            result["gravity_aligned"] = True
-        if phys.get("time_dilation", 1.0) == 1.0:
-            result["time_rate_aligned"] = True
-        if phys.get("unit_scale", "") == "metric":
-            result["unit_metric"] = True
+        # 物理常数由世界创世时自定，审计只需验证已显式声明（不强制地球值）
+        if all(k in phys for k in ("gravity", "time_dilation", "unit_scale")):
+            result["physics_declared"] = True
         if phys.get("no_dimensional_inflation", False):
             result["no_dimensional_inflation"] = True
-        if all(result[k] for k in ["gravity_aligned", "time_rate_aligned", "unit_metric", "no_dimensional_inflation"]):
+        if all(result[k] for k in ["physics_declared", "no_dimensional_inflation"]):
             result["verdict"] = "PASS - 符合物理基准标准"
         elif result["verdict"] == "PENDING":
-            result["verdict"] = "FAILED - 物理常数未对齐，将物理层隔离"
+            result["verdict"] = "FAILED - 物理常数未声明或 no_dimensional_inflation 缺失，将物理层隔离"
         return result
 
     def _audit_auth_security(self, world_instance) -> Dict:

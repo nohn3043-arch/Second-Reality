@@ -26,9 +26,9 @@ PHYSICS_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "required": ["gravity", "time_dilation", "unit_scale", "no_dimensional_inflation"],
     "properties": {
-        "gravity": {"type": "number", "const": NOHN_LAW_AXIOMS["gravity"]},
-        "time_dilation": {"type": "number", "const": NOHN_LAW_AXIOMS["time_dilation"]},
-        "unit_scale": {"type": "string", "const": NOHN_LAW_AXIOMS["unit_scale"]},
+        "gravity": {"type": "number"},
+        "time_dilation": {"type": "number"},
+        "unit_scale": {"type": "string"},
         "no_dimensional_inflation": {"type": "boolean", "const": True},
     },
 }
