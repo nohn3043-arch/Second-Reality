@@ -6,7 +6,7 @@
 #   - tick 主循环（对齐 TemporalSubstrate.global_clock）
 #   - 事件传导（因果链记录 + 历史哈希链追加）
 #   - 世界快照 + 持久化（进程重启不丢状态）
-#   - 周期性上报 audit_engine.SecondPerspectiveAuditor 18 项审计
+#   - 周期性上报 audit_engine.SecondPerspectiveAuditor 19 项审计
 #
 # 目标形态：无 GUI 依赖、可横向扩展、可作为企业服务底座。
 #
