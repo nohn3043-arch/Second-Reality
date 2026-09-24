@@ -13,6 +13,10 @@
   <em>Virtual World & Metaverse Infrastructure Base</em>
 </p>
 
+<p align="center">
+[简体中文](README-zh.md) | English
+</p>
+
 <div style="max-width: 1100px; margin: 0 auto; padding: 0 16px; font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; color: #2b2b2b; line-height: 1.8;">
 
 ## ✦ About
