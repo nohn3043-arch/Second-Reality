@@ -1,27 +1,147 @@
-# Nohn 虚拟世界法律层 — 物理基准规范 (Law Layer: Physics Baseline Standard) V2.1
-# law 层四大模块之一：统一物理常数，防止维度崩坏与数值膨胀引流
+# Nohn 虚拟世界法律层 — 物理基准规范 · 真实性基准 (Law Layer: Physics Baseline / Reality Baseline Standard) V3.0
+# law 层四大模块之一，经宪法第零章（世界构成公理）与治理公理一授权。
+# 主题：虚拟世界必须是一个真实的世界。
 
-## 1. 公理级物理常数 (Axiomatic Constants)
-- `CONST_GRAVITY = 9.80665`（m/s²，标准重力加速度，精确值）
-- `CONST_TIME_RATE = 1.0`（统一时间流速，time_dilation 必须为 1.0）
-- `UNIT_SCALE = "metric"`（统一空间度量衡，公制，对齐 NOHN_LAW_AXIOMS 单一权威来源）
-- 要素反应表（Element Reactions）：
-  - fire + water → evaporation（蒸发）
-  - fire + electro → overload（超载）
-  - 其余反应由各世界声明并登记，但不得与公理反应冲突。
+# ============================================================
+# 【V3.0 立场变更声明】
+# ------------------------------------------------------------
+# V2.1 规定「物理常数必须对齐地球基准值（重力 9.80665 ± 1e-4、时间流速 1.0、
+# 强制公制）」，该立场与主题「真实」相悖，自本版起废止。
+#
+# 废止理由：真实来自不变性，不来自与地球同值。
+#   - 一个重力为 3.7 m/s² 的世界，若该值创世锁定、全域一致、被实际执行，
+#     它对其中居民而言就是真实的物理。
+#   - 一个重力为 9.80665、却可被运营方在后台改写的世界，不是真实的世界。
+#   - 以「是否等于地球值」为真实判据，还产生一个附带代价：它禁止一切
+#     非地球物理的世界存在，等于以真实性之名消灭虚拟世界本身。
+#
+# 因此本版把判据从「数值是否等于基准」改为「不变性能否被验证」。
+# 这也修正了一处既存缺陷：旧版 law 文本要求对齐地球值，而
+# constitution_rules.PhysicsBaseline.aligned() 的代码本就只要求「显式声明且
+# 不强制地球值」——公示文本与执行代码长期不一致，本身即违反下述 R4。
+# ============================================================
 
-## 2. 维度通胀禁令 (No Dimensional Inflation)
-- 禁止通过"数值膨胀"（如异常重力、加速时间、放大单位）引流旧世界。
-- 任何物理常数偏离基准的世界，将在物理层被隔离，不可与 Nohn 生态交互。
+## 0. 真实性定义 (Reality Definition)
 
-## 3. 合规判定（供审计员校验）
-- 世界必须同时满足：① 重力对齐 9.80665（容差 1e-4）；② 时间流速 = 1.0；③ 单位制为公制；④ 无维度通胀。
-- 任一不满足 → 物理合规审计 FAILED，物理层隔离。
+一个虚拟世界是「真实的世界」，当且仅当同时满足 R1–R5 五条判据。
+真实性是**结构性属性**，不是数值属性：它描述规则如何被设定与被执行，
+不描述规则的具体内容。
+
+## 1. 真实性判据 (Reality Criteria)
+
+### R1 创世锁定 (Genesis Lock)
+- 全部物理常数在创世时一次性注入，注入成功即锁定。
+- 锁定后不存在「超级用户 / 上帝模式 / 后台修正」通道。
+- 变更唯一路径是分叉新世界，不得在原世界打补丁（见 §3）。
+- 可验证形式：锁定状态须锚入账本，不得仅由进程内布尔变量承载。
+
+### R2 全域一致 (Global Consistency)
+- 同一世界内所有区域、所有实例、所有副本使用同一组常数。
+- 不得存在区域性例外、特权区域、隐藏参数。
+- 跨数据中心部署时，常数集须随分片元数据一并复制，不得各自默认。
+
+### R3 因果闭合 (Causal Closure)
+- 每一状态变更必须具有可追溯的因果前驱。
+- 禁止外部状态注入：任何主体（含创世者、运营方、审计方）不得在因果链
+  之外写入世界状态。
+- 可审计形式：账本哈希链逐事件回溯；出现无前驱事件即为越界，且可由
+  链探针定位到具体索引。
+
+### R4 公示即执行 (Published = Executed)
+- 世界对外公示的常数集，必须等于账本锚定的常数集。
+- 实现形式：创世时对常数集计算承诺哈希（commitment hash）写入账本；
+  任何时刻第三方可重算比对。
+- 公示值与执行值不一致 → 判定为不真实，物理层隔离。
+- 本条同时约束治理方自身：法律文本与执行代码不一致，亦属违反 R4。
+
+### R5 反应表完备 (Reaction Table Completeness)
+- 要素反应表必须在创世时完备声明，并随常数集一并锁定。
+- 不得在运行时隐式扩展、隐式兜底、隐式插值。
+- 未声明的反应 = 不发生反应（fail-closed，而非 fail-open）。
+
+## 2. 维度通胀禁令 (No Dimensional Inflation) — R1 的特例
+
+- 保留 V2.1 的硬约束：禁止通过数值膨胀（如异常重力、加速时间、放大单位）
+  引流旧世界。
+- 判定依据变更：不再检查「是否偏离地球值」，而检查「是否存在创世后的
+  常数变更，或公示-执行不一致」。
+- `no_dimensional_inflation` 恒为 True，不可关闭，不随世界设定变化。
+
+## 3. 逃生条款：创世错误 (Genesis Error Escape Clause)
+
+「真实」要求世界不可关停、不可回滚。若创世常数集本身因果不自洽
+（例如反应表含循环、R3 无法满足），则按现有条款会出现「永久坏掉且不能停」
+的死锁。本条款为该死锁提供唯一自洽的出路：
+
+- **原世界继续运行**——居民在此期间产生的历史是真实的，不因常数错误而被抹除；
+- 不得关停、不得回滚、不得重置（宪法第十条：任何单一实体不得单方面关停世界）；
+- 由审计结论触发**分叉**，生成修正世界；迁移由居民**自愿**选择；
+- 不允许「原地修正」：原地修正会使已发生的历史失去依据，等于否定真实性。
+
+原则：**错误被记为历史，而非被抹去。**
+
+## 4. 合规判定（供审计员校验）
+
+- 世界必须同时满足 R1–R5；任一不满足 → **真实性审计 FAILED，物理层隔离**。
+- 审计对象是「不变性」，不再是「数值是否等于 9.80665」。
+- 审计所需的可验证信号：
+  - R1：账本中是否存在创世锁定记录
+  - R2：各分片元数据中的常数集是否逐字节一致
+  - R3：账本哈希链是否存在无前驱事件
+  - R4：公示常数集 hash 是否等于账本锚定 hash
+  - R5：反应表是否在创世记录中完备声明
+
+## 5. 与治理公理一的衔接
+
+- 修改已锁定的常数需 ≥2/3 全球公投
+  （`constitution_rules.CONSENSUS_THRESHOLD`），且公投通过后仍然**只分叉、
+  不打补丁**（`ImmutableWorldRule.propose_amendment`）。
+- 公投不能用于绕过 R1：公投决定的是「未来分叉世界的常数」，
+  不是「当前世界的常数」。当前世界的常数一经创世即为历史事实。
+
+## 6. 参考默认值 (Reference Defaults)
+
+- `NOHN_LAW_AXIOMS` 中的 gravity / time_dilation / unit_scale 是**创世参数模板**，
+  供新建世界时取值参考，**不是强制值**。
+- 一经注入某个世界，该组取值即成为该世界的不变量，受 R1 约束。
+- 单一权威来源：`constitution_rules.NOHN_LAW_AXIOMS`，不得在其他位置重复硬编码。
 
 ---
-## 1. Axiomatic Constants
-- gravity 9.80665, time_rate 1.0, unit metric. Element reactions fixed.
-## 2. No Dimensional Inflation
-- Worlds deviating from baseline are physically isolated.
-## 3. Compliance
-- gravity aligned; time 1.0; metric; no inflation.
+## 0. Reality Definition
+A virtual world is a *real* world iff it satisfies R1–R5. Reality is a structural
+property (how rules are set and enforced), not a numeric one (what the values are).
+
+## 1. Reality Criteria
+- **R1 Genesis Lock** — constants injected once at genesis, then locked; no superuser
+  or backdoor modification path; ledger-anchored lock state.
+- **R2 Global Consistency** — one constant set across all regions, instances and
+  replicas; no regional exceptions or hidden parameters.
+- **R3 Causal Closure** — every state change has a traceable causal predecessor;
+  no exogenous state injection by any party, including the founder and the auditor.
+- **R4 Published = Executed** — the published constant set must equal the
+  ledger-anchored set, verifiable by a commitment hash recomputable by any third
+  party. A mismatch is a reality failure, not merely a policy violation.
+- **R5 Reaction Table Completeness** — the element reaction table is declared in full
+  at genesis and locked with the constants; no runtime implicit extension.
+  Undeclared reaction = no reaction (fail-closed).
+
+## 2. No Dimensional Inflation — a special case of R1
+Retained as a hard constraint, but the test changes: it no longer checks deviation
+from Earth values, only post-genesis constant changes or published-vs-executed
+mismatch. `no_dimensional_inflation` is permanently True.
+
+## 3. Genesis Error Escape Clause
+If the genesis constants are audited as causally inconsistent, the original world
+**keeps running** (its inhabitants' history is real and must not be erased) and may
+not be halted, rolled back, or reset. A corrected world is **forked**; migration is
+voluntary. In-place correction is prohibited — it would remove the basis of history
+already lived. *Error is recorded as history, not erased from it.*
+
+## 4. Compliance
+A world must satisfy R1–R5; any failure → reality audit FAILED, physically isolated.
+Audited object is invariance, not whether the values equal 9.80665.
+
+## 5. Link to Governance Axiom 1
+Amending locked constants requires a ≥2/3 global referendum and still yields a
+**fork, not a patch**. A referendum cannot be used to bypass R1: it determines the
+constants of a future forked world, never those of the current one.

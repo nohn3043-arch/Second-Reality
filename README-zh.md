@@ -97,7 +97,7 @@ serve(world, host="0.0.0.0", port=8000)
 
 - <strong>宪法规则</strong>（`constitution_rules.py`）：原始公理与十条治理法，锁定为根信任锚。`NOHN_LAW_AXIOMS` 是共享常量的唯一权威来源（重力、时间膨胀、单位尺度、灵魂哈希长度、预言机最小信源数）。
 - <strong>审计引擎</strong>（`audit_engine.py`）：第二视角认知审计器 —— `ResponsibilityAccount` + 可插拔 `AuditPlugin` + `CognitiveAuditEngine`（反事实 `reconstruct()`）+ `SecondPerspectiveAuditor`。运行 19 维合规审查；其中认证安全维度是在隔离的内存世界中功能性执行账户栈，而非探测属性。
-- <strong>法律</strong>（`law/`）：四份人类可读标准 —— 通信协议 · 全球统一经济（货币、锚定、储备证明、兑付） · 身份认证（绑定灵魂哈希，含 V2.2 凭据恢复条款） · 物理基线。其机器可读的 JSON-Schema 对应物位于 `system/protocol.py`，驱动入驻校验。
+- <strong>法律</strong>（`law/`）：四份人类可读标准 —— 通信协议 · 全球统一经济（货币、锚定、储备证明、兑付） · 身份认证（绑定灵魂哈希，含 V2.2 凭据恢复条款） · <strong>真实性基准（V3.0）</strong>，其立论是<em>虚拟世界必须是一个真实的世界</em>。此处把「真实」当作<strong>结构性</strong>属性而非数值属性：真实来自规则的不变性 —— 创世锁定、全域一致、因果闭合、公示即执行、完备声明 —— 而不来自数值是否等于地球值。一个重力为 3.7&nbsp;m/s² 的世界，只要该值创世锁定且被实际执行，它就是真实的；一个重力为 9.80665、却可被运营方后台改写的世界，不是真实的世界。判据为 R1–R5，且真实性已作为入驻门禁强制执行。其机器可读的 JSON-Schema 对应物位于 `system/protocol.py`，驱动入驻校验。
 - <strong>系统</strong>（`system/`，23 个模块）：真实实现层 —— 账本、共识、智能体引擎、无头运行时、REST/WS API、协议 schema、账户系统各层、地理分布子系统与边缘接入。见下方模块表。
 - <strong>桥</strong>（`compatibility_bridge.py`）：遗留世界进入 Nohn 领地的海关检查站 —— `translate_intent()` 语义清洗、`check_physics_constants()` 物理校验、`verify_soul_hash()` 身份核验。
 
@@ -199,6 +199,7 @@ STORAGE=postgres DATABASE_URL=postgresql://user:pass@db:5432/world python -m sys
 | `tools/cluster_smoke.py` | 3 节点本地集群：心跳、epoch 广播、AOI 复制、HLC 收敛、迁移交接、分区降级与恢复 | 约 14 秒 |
 | `tools/edge_smoke.py` | 边缘设备：凭据登记、挑战登录、AOI 视口增量、最近数据中心路由、跨数据中心迁移、撤销 | <1 秒 |
 | `tools/wiring_smoke.py` | 账户抽象（会话密钥签发 → 挑战 → 执行 → 约束 → 撤销）、密钥轮换（退役可验证 / 撤销即失效）、身份根（Shamir 3-of-5 恢复）、灵魂漫游（签发 → 篡改拒绝 → 验证 → 映射） | 约 2 秒 |
+| `tools/reality_smoke.py` | 真实性基准 R1–R5（创世锁定 / 全域一致 / 因果闭合 / 公示即执行 / 反应表完备）、`reality` 入驻门禁、公投 fail-closed 行为、以及「变更唯一路径是分叉」（父世界不被改写、子世界同样锁定）—— 共 40 项检查 | <1 秒 |
 
 **专家评审报告**（`expert_report.py`）—— 将审计器的机器可读裁定连同账本哈希锚点导出为本地可复现的 Markdown 报告（见 `reports/`）。报告本身只是展示层；每个锚点（哈希 / 裁定）都指向可重跑的原始操作，因此评审者永远无需信任报告本身。
 

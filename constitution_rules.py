@@ -11,6 +11,8 @@
 # 经济层被隔离。
 
 from typing import List, Dict, Any, Optional
+import hashlib
+import json
 import uuid
 from dataclasses import dataclass, asdict
 
@@ -44,14 +46,20 @@ except ImportError:
 # ============================================================
 
 NOHN_LAW_AXIOMS = {
-    # 物理基准默认参考值（law/Physics baseline standard）
-    # 注意：这些是创世时的参考默认值，不是强制地球值。
-    # 每个虚拟世界在创世时自行设定物理常数，设定后不可更改（治理公理一）。
-    # 修改已设定的物理常数必须通过 ≥2/3 全球公投（propose_amendment）。
-    "gravity": 9.80665,          # 默认重力加速度参考值（m/s^2）——世界可自定义
-    "time_dilation": 1.0,        # 默认时间膨胀系数参考值——世界可自定义
-    "unit_scale": "metric",      # 默认单位制参考值——世界可自定义
-    "no_dimensional_inflation": True,  # 禁止数值膨胀式引流（此项为硬约束，不可关闭）
+    # 创世参数模板（law/Physics baseline standard V3.0 · 真实性基准）
+    # 主题：虚拟世界必须是一个真实的世界。
+    #
+    # 注意：这些是新建世界时的取值模板，不是强制地球值，也不是校验基准。
+    # 每个虚拟世界在创世时自行设定物理常数；一经注入即为该世界的不变量。
+    # 真实性判据 R1–R5 检验的是「不变性能否被验证」，
+    # 不是「数值是否等于 9.80665」——真实来自不变性，不来自与地球同值。
+    # 修改已锁定的物理常数必须通过 ≥2/3 全球公投（propose_amendment），
+    # 且公投通过后仍然只分叉新世界，不得在原世界打补丁。
+    "gravity": 9.80665,          # 创世模板：重力加速度（m/s^2）——创世时自定，注入即锁定
+    "time_dilation": 1.0,        # 创世模板：时间膨胀系数——创世时自定，注入即锁定
+    "unit_scale": "metric",      # 创世模板：单位制——创世时自定，注入即锁定
+    # R1 特例：禁止数值膨胀式引流（硬约束，恒为 True，不可关闭，不随世界设定变化）
+    "no_dimensional_inflation": True,
     # 身份确权（law/Identity attestation standard）
     "soul_hash_bits": 256,       # SHA-256 / 64 hex
     "soul_hash_len": 64,
@@ -394,13 +402,23 @@ class GenesisCondition:
 # ============================================================
 
 class ImmutableWorldRule:
-    """任何世界的核心物理/逻辑规则，一经创世设定，永不更改"""
+    """任何世界的核心物理/逻辑规则，一经创世设定，永不更改。
 
-    def __init__(self, physics_constants: Optional[Dict] = None):
+    实现 law/Physics baseline standard V3.0 · 真实性基准的自载体：
+    - R1 创世锁定   : 常数注入即锁；变更唯一路径是分叉（_fork_world）
+    - R4 公示即执行 : commitment() 给出可被第三方重算的承诺哈希
+    """
+
+    def __init__(self, physics_constants: Optional[Dict] = None,
+                 world_id: Optional[str] = None):
         # 世界宪法 - 写入智能合约
         self.world_constitution = SmartContract(owner="genesis")
+        # 世界标识：分叉时用于生成 parent/child 关系
+        self.world_id = world_id or f"world-{uuid.uuid4().hex[:8]}"
+        # 分叉登记簿：每次分叉追加一条记录，只增不删
+        self.fork_registry: List[Dict] = []
         # 核心物理参数——创世时由世界创建者注入，此后不可更改
-        # 未注入时使用 NOHN_LAW_AXIOMS 参考默认值
+        # 未注入时使用 NOHN_LAW_AXIOMS 创世模板（模板值，非强制地球值）
         defaults = {
             "gravity": NOHN_LAW_AXIOMS["gravity"],
             "time_dilation": NOHN_LAW_AXIOMS["time_dilation"],
@@ -411,8 +429,26 @@ class ImmutableWorldRule:
             }
         }
         self.physics_constants = physics_constants if physics_constants else defaults
-        self._physics_locked = False  # 创世后锁定为 True
+        # R1：构造时显式注入常数即视为创世注入，直接锁定。
+        # 只有「未注入」的世界才允许随后调用一次 set_physics_constants 完成创世。
+        # 修正：旧实现允许「构造时注入 + 事后 set_physics_constants 覆写」，
+        # 那是一条绕过 R1 的通道。
+        self._physics_locked = bool(physics_constants)
         self.rule_modification_log = []  # 任何"尝试修改"的记录
+
+    def commitment(self) -> str:
+        """
+        R4 公示即执行：对当前常数集计算承诺哈希。
+
+        审计方用同一算法重算，与账本锚定的哈希比对；不一致即判定为不真实。
+        常数集按 key 排序后序列化，保证同一集合在任何进程/平台得到同一哈希。
+        """
+        payload = json.dumps(
+            {str(k): v for k, v in sorted(self.physics_constants.items(),
+                                          key=lambda kv: str(kv[0]))},
+            ensure_ascii=False, sort_keys=True, default=str,
+        )
+        return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def set_physics_constants(self, constants: Dict) -> bool:
         """
@@ -432,39 +468,149 @@ class ImmutableWorldRule:
         self._physics_locked = True
         return True
 
-    def propose_amendment(self, proposed_change: Dict, proposer: str) -> bool:
+    def propose_amendment(self, proposed_change: Dict, proposer: str,
+                          ballot: Optional[Dict] = None) -> bool:
         """
-        建议修改已设定的物理常数或核心规则？可以。但必须满足条件：
-        1. 收集用户意见——需要 ≥2/3 全球公投同意
-        2. 任何修改必须"分叉"新世界，不能在原世界打补丁
+        提议修改已锁定的常数或核心规则。两条条件须同时满足：
+
+        1. ≥2/3 全球公投同意（CONSENSUS_THRESHOLD）
+        2. 通过后仍然只分叉新世界，不得在原世界打补丁
+
+        公投不能用于绕过 R1：它决定的是「未来分叉世界的常数」，而不是
+        「当前世界的常数」。当前世界的常数一经创世即为历史事实。
+
+        ballot：公投原始计数（见 _global_referendum）。不提供则视为无记录，
+        赞成率 0.0、提案驳回（fail-closed）。
         """
-        # 条件1：收集用户意见，需要2/3以上"公民"同意
-        approval_rate = self._global_referendum(proposed_change)
-        if approval_rate < CONSENSUS_THRESHOLD:
-            self.rule_modification_log.append({
+        approval_rate = self._global_referendum(proposed_change, ballot)
+
+        def _record(status, **extra):
+            entry = {
                 "proposal": proposed_change,
-                "status": "rejected",
-                "reason": "insufficient consensus (user vote below 2/3)"
-            })
+                "proposer": proposer,
+                "status": status,
+                "approval_rate": approval_rate,
+                "threshold": CONSENSUS_THRESHOLD,
+                # 原始计数留档：审计方可按其他基准重算，无需重新收集
+                "ballot": dict(ballot) if ballot else None,
+            }
+            entry.update(extra)
+            self.rule_modification_log.append(entry)
+
+        if approval_rate < CONSENSUS_THRESHOLD:
+            _record("rejected",
+                    reason=("no vote record (fail-closed)" if not ballot
+                            else "insufficient consensus (user vote below 2/3)"))
             return False
 
-        # 条件2：任何修改必须"分叉"，不能"补丁"
-        self._fork_world(proposed_change)
-        self.rule_modification_log.append({
-            "proposal": proposed_change,
-            "status": "approved_via_fork",
-            "approval_rate": approval_rate
-        })
+        fork = self._fork_world(proposed_change, ballot)
+        if fork.get("status") != "forked":
+            _record("fork_failed", reason=fork.get("reason", "unknown"))
+            return False
+
+        _record("approved_via_fork", fork_id=fork["fork_id"],
+                parent_untouched=fork["parent_untouched"])
         return True
     
-    def _global_referendum(self, change):
-        # 模拟全民公投
-        return 0.0
-    
-    def _fork_world(self, change):
-        # 创建新世界，旧世界继续存在
-        # 类似于区块链的硬分叉
-        pass
+    # ------------------------------------------------------------
+    # 公投与分叉：R1「变更唯一路径是分叉」的实现载体
+    # ------------------------------------------------------------
+
+    def _global_referendum(self, change: Dict, ballot: Optional[Dict] = None) -> float:
+        """
+        计算一次全球公投的赞成率。
+
+        ballot 结构（整数计数，由账本投票记录提供）::
+
+            {"eligible": 1000, "approve": 700, "reject": 200, "abstain": 100}
+
+        返回赞成率 = approve / (approve + reject)，即「决定性选票」中的赞成比例。
+
+        两条设计约束：
+
+        1. 不内置法定人数（quorum）策略。是否要求投票率下限属于宪法层政策，
+           应由治理方显式声明，而非在此硬编码一个来源不明的阈值——R1 要求的
+           可审计性不应由一个规定值悄悄承担。
+        2. 未提供 ballot 时返回 0.0（fail-closed）。没有投票记录不等于默认通过，
+           与 R5「未声明即不发生」同一原则。
+
+        原始计数由 propose_amendment 一并写入 rule_modification_log，
+        使任何审计方都能按其他基准（例如「全体合格公民的 2/3」）重算结论，
+        无需重新收集数据。
+        """
+        if not ballot:
+            return 0.0
+        try:
+            approve = int(ballot.get("approve", 0))
+            reject = int(ballot.get("reject", 0))
+        except (TypeError, ValueError):
+            return 0.0
+        if approve < 0 or reject < 0:
+            return 0.0
+        decisive = approve + reject
+        if decisive <= 0:
+            return 0.0
+        return approve / decisive
+
+    def _fork_world(self, change: Dict, ballot: Optional[Dict] = None) -> Dict:
+        """
+        分叉出一个新世界。原世界继续运行，不作任何修改。
+
+        返回分叉凭证（fork record）::
+
+            {
+              "fork_id":           "world-ab12cd34-fork-001",
+              "parent_world_id":   "world-ab12cd34",
+              "parent_constants":  {...},   # 分叉时父世界不变量的只读快照
+              "child_constants":   {...},   # 子世界注入的新常数
+              "parent_commitment": "sha256:...",
+              "child_commitment":  "sha256:...",
+              "requires_migration": True,   # 迁移由居民自愿选择，不自动搬迁
+              "parent_untouched":  True,    # R1：父世界未被改写（当场校验）
+              "ballot":            {...},   # 触发本次分叉的公投原始计数
+              "status":            "forked",
+            }
+
+        关键约束（law/Physics baseline standard V3.0 §3）：
+        - 父世界的 physics_constants 不得被修改：分叉是复制出新世界，不是升级。
+        - 不提供「原地修正」路径：原地修正会使已发生的历史失去依据，
+          等于否定真实性。
+        - 子世界同样受 R1 约束：其常数一经注入即锁定，无超级用户通道。
+        - 记录只携带凭证，不携带子世界对象本体；世界注册由 system/ 层负责，
+          以保持本文件「只承载规则、不承载实现」的定位。
+        """
+        parent_snapshot = dict(self.physics_constants)
+        parent_commitment = self.commitment()
+
+        child_id = f"{self.world_id}-fork-{len(self.fork_registry) + 1:03d}"
+        child_constants = dict(parent_snapshot)
+        child_constants.update(change or {})
+
+        child = ImmutableWorldRule(world_id=child_id)
+        if not child.set_physics_constants(child_constants):
+            # 分叉失败不得留下半成品记录，也不得动父世界
+            return {
+                "fork_id": None,
+                "parent_world_id": self.world_id,
+                "status": "fork_failed",
+                "reason": "child world rejected the proposed constant set",
+                "parent_untouched": self.physics_constants == parent_snapshot,
+            }
+
+        record = {
+            "fork_id": child_id,
+            "parent_world_id": self.world_id,
+            "parent_constants": parent_snapshot,
+            "child_constants": dict(child.physics_constants),
+            "parent_commitment": parent_commitment,
+            "child_commitment": child.commitment(),
+            "requires_migration": True,
+            "parent_untouched": self.physics_constants == parent_snapshot,
+            "ballot": dict(ballot) if ballot else None,
+            "status": "forked",
+        }
+        self.fork_registry.append(record)
+        return record
 
 
 # ============================================================
@@ -868,7 +1014,19 @@ class UniversalVocabulary:
 
 
 class PhysicsBaseline:
-    """物理常数基准 - 验证并网世界是否与其自身创世时设定的物理常数一致"""
+    """物理基准 · 真实性基准 (law/Physics baseline standard V3.0)
+
+    主题：虚拟世界必须是一个真实的世界。
+
+    三个入口，分工明确：
+    - aligned()          : 并网准入的最小校验（向后兼容，行为不变）
+    - reality_compliant(): 真实性判据 R1–R5 的逐条可验证结果
+    - is_real()          : R1–R5 全通过判定（任一不满足 → 物理层隔离）
+
+    真实性是结构性属性——描述规则如何被设定与被执行，不描述规则的具体内容。
+    一个重力为 3.7 m/s² 的世界，只要创世锁定且被实际执行，就是真实的；
+    一个重力为 9.80665、却可被运营方后台改写的世界，不是真实的世界。
+    """
 
     def aligned(self, physics: Dict) -> bool:
         """
@@ -885,6 +1043,47 @@ class PhysicsBaseline:
         if not physics.get("no_dimensional_inflation", False):
             return False  # 硬约束：禁止数值膨胀式引流，不可关闭
         return True
+
+    # ------------------------------------------------------------
+    # 真实性判据 R1–R5（law/Physics baseline standard V3.0）
+    # ------------------------------------------------------------
+
+    def reality_compliant(self, physics: Dict) -> Dict[str, bool]:
+        """
+        真实性审计：逐条返回 R1–R5 的可验证结果，供审计层结构化消费。
+
+        R1 创世锁定   : 常数须有创世锁定记录，且该锁状态锚入账本
+        R2 全域一致   : 常数集须在全部区域/实例/副本间一致
+        R3 因果闭合   : 须声明无外部状态注入通道（含创世者与审计方）
+        R4 公示即执行 : 公示常数承诺哈希须等于账本锚定哈希
+        R5 反应表完备 : 要素反应表须在创世时完备声明
+
+        审计对象是「不变性」，不是「数值是否等于 9.80665」。
+        未声明的信号一律判 False（fail-closed），不得默认通过——
+        这与 R5 的 fail-closed 原则一致，也避免「未实现即视为合规」。
+        """
+        published = _safe_get(physics, "published_commitment", None)
+        anchored = _safe_get(physics, "ledger_commitment", None)
+        return {
+            "R1_genesis_lock": bool(_safe_get(physics, "genesis_locked", False)),
+            "R2_global_consistency": bool(
+                _safe_get(physics, "constants_globally_consistent", False)),
+            "R3_causal_closure": bool(
+                _safe_get(physics, "no_exogenous_injection", False)),
+            # R4：必须两侧都存在且相等；缺任一侧不得视为通过
+            "R4_published_equals_executed": bool(
+                published is not None and anchored is not None and published == anchored),
+            "R5_reaction_table_complete": bool(
+                _safe_get(physics, "reaction_table_complete", False)),
+        }
+
+    def is_real(self, physics: Dict) -> bool:
+        """R1–R5 全部满足 → 该世界是真实的世界；任一不满足 → 物理层隔离。"""
+        return all(self.reality_compliant(physics).values())
+
+    def reality_failures(self, physics: Dict) -> List[str]:
+        """返回未通过的判据名列表；空列表表示通过全部真实性判据。"""
+        return [k for k, ok in self.reality_compliant(physics).items() if not ok]
 
 
 class IdentityProtocol:
