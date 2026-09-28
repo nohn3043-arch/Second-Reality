@@ -39,7 +39,11 @@ REALITY_SCHEMA: Dict[str, Any] = {
     "description": (
         "主题：虚拟世界必须是一个真实的世界。真实性是结构性属性——"
         "描述规则如何被设定与被执行，不描述规则的具体内容。"
-        "检验对象是「不变性」，不是「数值是否等于 9.80665」。"
+        "检验对象是「不变性」，不是「数值是否等于 9.80665」。 | "
+        "Subject: a virtual world must be a real world. Reality is a structural "
+        "property — it describes how rules are set and enforced, not what the rules' "
+        "contents are. The object of audit is invariance, not whether the value "
+        "equals 9.80665."
     ),
     "required": [
         "genesis_locked",
@@ -52,27 +56,37 @@ REALITY_SCHEMA: Dict[str, Any] = {
     "properties": {
         "genesis_locked": {
             "type": "boolean", "const": True,
-            "description": "R1 创世锁定：常数注入即锁，无超级用户/后台修正通道",
+            "description": ("R1 创世锁定：常数注入即锁，无超级用户/后台修正通道 | "
+                            "R1 Genesis Lock: constants injected once at genesis, then locked; "
+                            "no superuser or back-door modification path"),
         },
         "constants_globally_consistent": {
             "type": "boolean", "const": True,
-            "description": "R2 全域一致：所有区域/实例/副本使用同一组常数",
+            "description": ("R2 全域一致：所有区域/实例/副本使用同一组常数 | "
+                            "R2 Global Consistency: one constant set across all regions, "
+                            "instances and replicas; no regional exceptions or hidden parameters"),
         },
         "no_exogenous_injection": {
             "type": "boolean", "const": True,
-            "description": "R3 因果闭合：禁止在因果链之外写入世界状态（含创世者与审计方）",
+            "description": ("R3 因果闭合：禁止在因果链之外写入世界状态（含创世者与审计方） | "
+                            "R3 Causal Closure: no exogenous state injection by any party, "
+                            "including the founder and the auditor"),
         },
         "published_commitment": {
             "type": "string",
-            "description": "R4 对外公示的常数集承诺哈希",
+            "description": ("R4 对外公示的常数集承诺哈希 | "
+                            "R4 commitment hash of the constant set published by the world"),
         },
         "ledger_commitment": {
             "type": "string",
-            "description": "R4 账本锚定的常数集承诺哈希；须与 published_commitment 相等",
+            "description": ("R4 账本锚定的常数集承诺哈希；须与 published_commitment 相等 | "
+                            "R4 commitment hash anchored in the ledger; must equal published_commitment"),
         },
         "reaction_table_complete": {
             "type": "boolean", "const": True,
-            "description": "R5 反应表完备：创世完备声明，未声明即不发生（fail-closed）",
+            "description": ("R5 反应表完备：创世完备声明，未声明即不发生（fail-closed） | "
+                            "R5 Reaction Table Completeness: declared in full at genesis; "
+                            "undeclared reaction = no reaction (fail-closed)"),
         },
     },
     "x-commitment-algorithm": (

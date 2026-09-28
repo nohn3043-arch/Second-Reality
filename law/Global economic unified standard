@@ -52,30 +52,55 @@
 - 赎回通道对该灵魂永久关闭，亦不可对任何第三方开放；资产与储备一并封存直至世界终结。
 
 ---
+# Nohn Virtual World Law Layer — Global Economic Unified Standard V2.1
+# Positioning: the "economic compliance details" among the four law-layer modules (identity attestation / communication protocol / physics baseline / compliance details).
+# Core objective: virtual-world currency and real-world currency are 1:1 interoperable.
+
+> This standard adopts a "real-world anchoring" model: anchored assets are pegged 1:1 to real reserves, while volatile assets are booked at real-time market value.
+> This standard therefore does not adopt floating exchange rates; the original V2.0 clause "exchange rates are freely formed by the market, with no mandatory pricing" is repealed.
+
 ## 1. Asset Attestation
 ### 1.1 Real-World Asset Onboarding
 #### A. Stable-Pegged
-- 【Compliant Fiat Stablecoins / CBDC】: Mapped 1:1 with issuance reserves, integrated into unified clearing, interoperable with all assets.
-- Mandatory Proof-of-Reserve (PoR): issuer must provide on-chain verifiable 1:1 reserve proof, audited in real time; reserve ratio < 100% suspends swapping.
-- Redemption Right: holders may redeem anchored assets 1:1 to real fiat at any time; redemption channel must be permanent and unclosable by any single party.
-#### B. Volatile (no 1:1 promise)
-- 【Bitcoin / Gold etc.】: booked at real-time fair value at onboarding, bound to unique `nft_dna`; redeemed at real-time market value on exit.
-- Fixed-supply assets (e.g. BTC 21,000,000) are mirrored on-chain records only, not granted "value-stable" property.
+- [Compliant fiat stablecoins / CBDC]: mapped 1:1 against issuance reserves, integrated into the unified clearing and settlement path, and interoperable with all assets without discrimination.
+- Mandatory Proof-of-Reserve (PoR): the issuer must provide an on-chain verifiable 1:1 reserve proof, verified in real time by the audit layer; a reserve ratio < 100% suspends redemption and triggers public disclosure.
+- Redemption right: holders have the right to redeem anchored assets back into real fiat 1:1 at any time; the redemption channel must be permanent and may not be shut down by any single party (unconstitutional, see Constitution Art. 10).
+
+#### B. Volatile Real-World Assets (no 1:1 promise)
+- [Bitcoin / gold, etc.]: booked at the real-time fair value at the moment of onboarding, bound to a unique `nft_dna`; redeemed at real-time market value when leaving the world.
+- Fixed-supply assets (e.g. BTC 21,000,000) are recorded only as on-chain mirrors and are not granted any "value-stable" property — their real-world price floats with the market.
+
 ### 1.2 Virtual World Assets
-- Platform currencies/points/tokens auto-map to Nohn standard assets upon submitting total supply + circulation proof; ownership bound to `GlobalIdentity.soul_hash`.
-- NFT/props generate unique `ASSET_ID` recording creator/attributes/history/permissions; duplication is invalid.
+- [Platform currencies / points / tokens]: regardless of issuer or engine, once the "total issuance + circulation proof" is submitted they are automatically mapped to Nohn standard assets, with ownership bound to the user's `GlobalIdentity.soul_hash`, transferable, convertible, and storable across platforms.
+- [NFTs / digital props / metaverse assets]: each generates a unique `ASSET_ID` recording "creator, attributes, history, permissions", with globally unique attestation; duplication is deemed invalid, completely eliminating counterfeiting and misappropriation.
+
 ## 2. Universal Value Swap
-- Unit of account: `NOHN_POINT`. Anchored assets swap 1:1 to real reserves; volatile assets convert at real-time market value.
-- Cross-world/real swapping: 1:1 value anchoring for anchored assets, no forced fees, no loss, instant, fully traceable.
+- Unit of account: `NOHN_POINT` (axiom point).
+- Principles of real-world interoperability:
+  - anchored assets → pegged 1:1 to real reserves;
+  - volatile assets → converted into `NOHN_POINT` at real-time market value.
+- Cross-world / cross-reality exchange: anchored assets follow the `1:1 value anchoring` principle, with no mandatory fees, no loss, instant settlement, and full traceability.
+- Settlement cost: covered by reserve interest or protocol subsidy; unilateral charging of users is prohibited (consistent with Constitution Art. 10 "anti-centralized control", avoiding the introduction of centralized fee-collecting nodes).
+
 ## 3. Supply Control
-- New issuance requires value endorsement + use description, audited before circulation. Destruction is permanently logged.
+- New issuance: a "value endorsement + purpose statement" must be submitted and pass audit before entering circulation, eliminating air coins and reckless issuance.
+- Asset destruction: permanently recorded in the audit log and publicly disclosed network-wide; irrevocable.
+
 ## 4. Reserve Custody & Redemption
-- Custody via on-chain PoR multi-sig/contract; no single-entity custody. Redemption 1:1 anytime; bankruptcy-isolated reserves.
+- Custodian: must be multi-sig / smart-contract custody subject to "on-chain Proof-of-Reserve (PoR) automated audit"; single-entity custodianship is prohibited.
+- Redemption channel: holders of anchored assets may redeem real fiat 1:1 at any time; the redemption interface must be public and may not be unilaterally shut down.
+- Bankruptcy isolation: reserve assets are isolated from the operator's assets; operator bankruptcy does not affect users' redemption rights.
+
 ## 5. Oracle & Valuation
-- ≥3 independent oracles, median/weighted average, on-chain signed; anomaly triggers circuit breaker.
-## 6. Asset Identifier Schema
-- `soul_hash`: SHA-256, 64 hex. `ASSET_ID`: `ASSET-<chain>-<sha256(...)>`. `nft_dna`: on-chain fingerprint.
+- Assets valued at real-time market value must connect to ≥ 3 independent oracle sources, taking the median / weighted average to prevent single-point manipulation.
+- Oracle signatures must be verifiable on-chain; abnormal volatility triggers a circuit breaker and manual review.
+
+## 6. Asset Identifier Schema (for auditing and cross-world verification)
+- `soul_hash`: SHA-256, 64 hexadecimal characters, bound to `GlobalIdentity` (see constitution_rules.py / Constitution Art. 6).
+- `ASSET_ID`: format `ASSET-<chain>-<sha256(creator|timestamp|seq)>`, globally unique.
+- `nft_dna`: on-chain asset fingerprint (e.g. BTC's `txid:index`), unforgeable and verifiable on-chain.
+
 ## 7. Frozen Asset Liquidation
-- On identity freeze from permanent key loss (Identity §1.1): all anchored assets of that soul are permanently locked — no destruction, no transfer, no reallocation to any public treasury.
-- Corresponding real reserves remain locked; PoR stays 100% (no reserve is ever released due to a freeze).
-- Redemption channels close permanently for that soul and must never be opened to any third party; assets and reserves are sealed until the end of the world.
+- After identity freeze caused by permanent private-key loss (key-loss clause, see Identity Attestation Standard §1.1): all anchored assets of that soul are **permanently locked** — not destroyed, not transferred, not allocated to any public treasury.
+- The corresponding real reserves remain locked; PoR stays at 100% (no reserve is ever released because of a freeze).
+- The redemption channel closes permanently for that soul and must never be opened to any third party; assets and reserves stay sealed until the end of the world.

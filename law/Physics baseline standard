@@ -107,41 +107,100 @@
 - 单一权威来源：`constitution_rules.NOHN_LAW_AXIOMS`，不得在其他位置重复硬编码。
 
 ---
+# Nohn Virtual World Law Layer — Physics Baseline / Reality Baseline Standard V3.0
+# One of the four law-layer modules, authorized by Constitution Chapter Zero (world-constitution axioms) and Governance Axiom 1.
+# Subject: a virtual world must be a real world.
+
+# ============================================================
+# [V3.0 Position Change Statement]
+# ------------------------------------------------------------
+# V2.1 required that "physical constants must align with Earth reference values
+# (gravity 9.80665 ± 1e-4, time flow 1.0, mandatory metric system)"; that position
+# contradicts the subject "reality" and is repealed as of this version.
+#
+# Grounds for repeal: reality comes from invariance, not from equalling Earth.
+#   - A world whose gravity is 3.7 m/s², if that value is locked at genesis, globally
+#     consistent, and actually enforced, is real physics to its inhabitants.
+#   - A world whose gravity is 9.80665 but which an operator can rewrite in a back
+#     office is not a real world.
+#   - Taking "does it equal Earth's value" as the test of reality carries a further
+#     cost: it forbids the existence of all non-Earth-physics worlds, i.e. it destroys
+#     virtual worlds themselves in the name of reality.
+#
+# This version therefore replaces the criterion "does the value equal the baseline"
+# with "can invariance be verified".
+# It also corrects an existing defect: the old law text demanded alignment with Earth
+# values, whereas constitution_rules.PhysicsBaseline.aligned() only ever required
+# "explicitly declared and not forcing Earth values" — published text and executing
+# code had long disagreed, which by itself violates R4 below.
+# ============================================================
+
 ## 0. Reality Definition
-A virtual world is a *real* world iff it satisfies R1–R5. Reality is a structural
-property (how rules are set and enforced), not a numeric one (what the values are).
+A virtual world is a "real world" iff it satisfies all five criteria R1–R5.
+Reality is a **structural property**, not a numeric property: it describes how rules
+are set and enforced, not what the rules' contents are.
 
 ## 1. Reality Criteria
-- **R1 Genesis Lock** — constants injected once at genesis, then locked; no superuser
-  or backdoor modification path; ledger-anchored lock state.
-- **R2 Global Consistency** — one constant set across all regions, instances and
-  replicas; no regional exceptions or hidden parameters.
-- **R3 Causal Closure** — every state change has a traceable causal predecessor;
-  no exogenous state injection by any party, including the founder and the auditor.
-- **R4 Published = Executed** — the published constant set must equal the
-  ledger-anchored set, verifiable by a commitment hash recomputable by any third
-  party. A mismatch is a reality failure, not merely a policy violation.
-- **R5 Reaction Table Completeness** — the element reaction table is declared in full
-  at genesis and locked with the constants; no runtime implicit extension.
-  Undeclared reaction = no reaction (fail-closed).
+### R1 Genesis Lock
+- All physical constants are injected once at genesis; a successful injection locks them.
+- After locking there is no "superuser / god mode / back-office correction" channel.
+- The only path to change is forking a new world; patching the original is prohibited (see §3).
+- Verifiable form: the lock state must be anchored into the ledger, not carried merely by an in-process boolean.
+
+### R2 Global Consistency
+- All regions, instances and replicas within one world use the same constant set.
+- No regional exceptions, privileged zones, or hidden parameters may exist.
+- In cross-datacenter deployment the constant set must be replicated together with shard metadata; shards may not fall back to their own defaults.
+
+### R3 Causal Closure
+- Every state change must have a traceable causal predecessor.
+- Exogenous state injection is prohibited: no subject (including the founder, the operator, or the auditor) may write world state outside the causal chain.
+- Auditable form: the ledger hash chain is traced event by event; an event without a predecessor is an out-of-bounds write, and the chain probe can locate it at a specific index.
+
+### R4 Published = Executed
+- The constant set published by the world must equal the constant set anchored in the ledger.
+- Implementation: at genesis a commitment hash of the constant set is computed and written into the ledger; a third party can recompute and compare at any time.
+- Published value ≠ executed value → judged unreal, and the physics layer is isolated.
+- This clause also binds the governing party itself: a mismatch between legal text and executing code likewise violates R4.
+
+### R5 Reaction Table Completeness
+- The element reaction table must be declared in full at genesis and locked together with the constant set.
+- No runtime implicit extension, implicit fallback, or implicit interpolation.
+- An undeclared reaction = no reaction (fail-closed, not fail-open).
 
 ## 2. No Dimensional Inflation — a special case of R1
-Retained as a hard constraint, but the test changes: it no longer checks deviation
-from Earth values, only post-genesis constant changes or published-vs-executed
-mismatch. `no_dimensional_inflation` is permanently True.
+- The hard constraint from V2.1 is retained: numerical inflation (e.g. abnormal gravity, accelerated time, enlarged units) may not be used to attract users from old worlds.
+- The basis of judgement changes: it no longer checks "deviation from Earth values", but "whether any post-genesis constant change exists, or whether published and executed values disagree".
+- `no_dimensional_inflation` is permanently True; it cannot be switched off and does not vary with world settings.
 
 ## 3. Genesis Error Escape Clause
-If the genesis constants are audited as causally inconsistent, the original world
-**keeps running** (its inhabitants' history is real and must not be erased) and may
-not be halted, rolled back, or reset. A corrected world is **forked**; migration is
-voluntary. In-place correction is prohibited — it would remove the basis of history
-already lived. *Error is recorded as history, not erased from it.*
+"Reality" requires that a world cannot be halted or rolled back. If the genesis constant set is itself causally inconsistent (e.g. the reaction table contains cycles and R3 cannot be satisfied), existing clauses would produce a deadlock of "permanently broken yet unstoppable". This clause provides the only self-consistent way out:
+- **The original world keeps running** — the history its inhabitants produce in the meantime is real and is not erased because of a constant error;
+- It may not be halted, rolled back, or reset (Constitution Art. 10: no single entity may unilaterally halt a world);
+- A **fork** is triggered by the audit conclusion, producing a corrected world; migration is a **voluntary** choice of the inhabitants;
+- "In-place correction" is not allowed: it would strip already-occurred history of its basis, which amounts to denying reality.
 
-## 4. Compliance
-A world must satisfy R1–R5; any failure → reality audit FAILED, physically isolated.
-Audited object is invariance, not whether the values equal 9.80665.
+Principle: **errors are recorded as history, not erased from it.**
+
+## 4. Compliance Determination (for auditors)
+- A world must satisfy R1–R5 simultaneously; any failure → **reality audit FAILED, physics layer isolated**.
+- The object of audit is "invariance", no longer "whether the value equals 9.80665".
+- Verifiable signals required by the audit:
+  - R1: whether a genesis-lock record exists in the ledger
+  - R2: whether the constant sets in each shard's metadata are byte-for-byte identical
+  - R3: whether the ledger hash chain contains any event without a predecessor
+  - R4: whether the published constant-set hash equals the ledger-anchored hash
+  - R5: whether the reaction table is declared in full in the genesis record
 
 ## 5. Link to Governance Axiom 1
-Amending locked constants requires a ≥2/3 global referendum and still yields a
-**fork, not a patch**. A referendum cannot be used to bypass R1: it determines the
-constants of a future forked world, never those of the current one.
+- Amending locked constants requires a ≥2/3 global referendum
+  (`constitution_rules.CONSENSUS_THRESHOLD`), and even after passing it still only **forks,
+  never patches** (`ImmutableWorldRule.propose_amendment`).
+- A referendum cannot be used to bypass R1: it decides the constants of a **future forked
+  world**, never those of the **current** world. Once a world is created, its constants are
+  historical fact.
+
+## 6. Reference Defaults
+- The gravity / time_dilation / unit_scale in `NOHN_LAW_AXIOMS` are **genesis parameter templates**, for reference when creating a new world; they are **not mandatory values**.
+- Once injected into a world, that set becomes that world's invariants, bound by R1.
+- Single authoritative source: `constitution_rules.NOHN_LAW_AXIOMS`; it must not be hard-coded again anywhere else.

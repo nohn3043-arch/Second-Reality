@@ -19,9 +19,22 @@
 - 任一不满足 → 通信合规审计 FAILED，隔离出 Nohn 生态。
 
 ---
+# Nohn Virtual World Law Layer — Communication Protocol Standard V2.1
+# One of the four law-layer modules: defines the minimal protocol for semantic exchange across engines.
+
 ## 1. Universal Translator
-- Envelope: `NOHN_MSG_LOGIC: <intent_type> | <payload>`. Unknown intents downgraded to NOHN_GENERIC_LOGIC.
+- Objective: force vendor-private commands to be laundered into Nohn standard semantics, stripping vendors of their covert interpretive authority over commands.
+- Standard envelope: `NOHN_MSG_LOGIC: <intent_type> | <payload>`, where payload is JSON.
+- Unknown commands: private commands that cannot be recognized are downgraded to `NOHN_GENERIC_LOGIC`, preventing logic penetration (neither dropped nor silently executed).
+
 ## 2. Standard Vocabulary
-- NOHN_STANDARD_MOVE / ACTION / COMMUNICATE / TRADE / GOVERNANCE.
-## 3. Compliance
-- Uses NOHN semantics; unknown downgraded; vocab mapped.
+- `NOHN_STANDARD_MOVE`: movement class (vendor example: TX_PRIVATE_MOVE)
+- `NOHN_STANDARD_ACTION`: action / attack class (vendor example: WY_PRIVATE_ATTACK)
+- `NOHN_STANDARD_COMMUNICATE`: emote / communication class (vendor example: MHY_PRIVATE_EMOTE)
+- `NOHN_STANDARD_TRADE`: trade class
+- `NOHN_STANDARD_GOVERNANCE`: governance / referendum class
+- Every vendor-private command must be mappable onto the table above; anything unmappable is handled as `NOHN_GENERIC_LOGIC`.
+
+## 3. Compliance Determination (for auditors)
+- A world must satisfy all three at once: (1) cross-world messages use the `NOHN_MSG_LOGIC` standard envelope; (2) unknown commands are downgraded rather than dropped; (3) private commands are mappable onto the standard vocabulary.
+- Any failure → communication compliance audit FAILED, and the world is isolated from the Nohn ecosystem.

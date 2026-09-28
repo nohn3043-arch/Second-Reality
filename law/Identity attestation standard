@@ -29,19 +29,32 @@
 - 任一不满足 → 身份合规审计 FAILED，禁止接入 Nohn 生态。审计密钥链路时：账本全部灵魂公钥指纹一致 + identity 含私钥材料判 FAIL。
 
 ---
+# Nohn Virtual World Law Layer — Identity Attestation Standard V2.1
+# One of the four law-layer modules: defines the unique identity of digital life, asset attestation, and cross-world portability.
+
 ## 1. Soul Hash
-- SHA-256, 64 hex. Permanent, non-revocable, globally unique across worlds.
+- Algorithm: SHA-256, outputting 64 hexadecimal characters (256 bit).
+- Generation: derived from the genesis proof (sha256 signature compliant + conflict-free + no duplicate registration); once generated, permanently locked.
+- Irrevocable: no platform has the right to unilaterally reclaim, reset, or freeze it (see Constitution Art. 6, SoulAttestation.revoke_soul → hard-coded False).
+- Cross-world unique: the same `soul_hash` is valid in all interconnected worlds; a world must accept an external `soul_hash` and may not force re-registration.
+
 ## 1.1 Public-Key Fingerprint & Credential
-- Identity (V2.2): `soul_hash = SHA-256(pubkey bytes)`; the hash is a public ID, not a secret; stealing it proves nothing without the private key.
-- Credential: private key (Ed25519), resident only in the holder's single-device Secure Enclave/TEE; biometric approval signs inside the device.
-- Authentication: challenge-response — server issues one-time nonce, device signs, server verifies signature only; nonce burnt after use.
-- Server never stores or touches any private-key material; plaintext credential transport / cloud-synced private keys / hosted keys are unconstitutional.
-- Key loss = identity freeze: unrecoverable, original soul_hash never re-registrable, associated memory permanently sealed (key-loss clause).
-- Identity irrevocable ≠ credential unrecoverable: soul_hash (identity root) is permanently locked (Constitution Art. 6), but device credentials (Passkey/private key) can be securely replaced via social recovery (system Layer 4: guardian voting + timelock + Shamir secret sharing). Recovery replaces credentials, not the original private key; soul_hash remains unchanged, identity continuity preserved.
+- Identity derivation (V2.2, final): `soul_hash = SHA-256(public key bytes)`; the public key may be openly inspected, and the hash is only an ID, not a secret; stealing the hash cannot enable impersonation, because signing requires the private key.
+- Credential = private key (Ed25519), resident only in the holder's single-device secure area (Secure Enclave / TEE); authorization uses biometrics (fingerprint / face) to approve signing inside the device.
+- Login = challenge-response: the server issues a one-time nonce → the device signs → the server verifies the signature only → a session token is issued; the nonce is burnt after use, preventing replay.
+- The server neither stores nor touches any private-key material; any implementation exhibiting "plaintext credential transport / cloud-synced private keys / platform-hosted private keys" is judged unconstitutional (the iron rule of zero plaintext credentials).
+- Private key loss = identity freeze: the original `soul_hash` can never be re-registered, and its associated memory is permanently sealed and unreadable by anyone (key-loss clause).
+- Identity irrevocable ≠ credential unrecoverable: the `soul_hash` (identity root) is permanently locked (Constitution Art. 6), but device credentials (Passkey / private key) can be securely replaced through social recovery (see System Layer 4 recovery layer: guardian voting + time lock + Shamir-sharded master-key custody). What is recovered is the credential, not the original private key; the `soul_hash` is unchanged and identity continuity is unbroken.
+
 ## 2. Asset Identifier Schema
-- `soul_hash`, `ASSET_ID = ASSET-<chain>-<sha256(creator|timestamp|seq)>`, `nft_dna` on-chain fingerprint.
+- `soul_hash`: SHA-256 / 64 hex, bound to `GlobalIdentity` (Constitution Art. 6).
+- `ASSET_ID`: format `ASSET-<chain>-<sha256(creator|timestamp|seq)>`, globally unique, recording creator / attributes / history / permissions.
+- `nft_dna`: on-chain asset fingerprint (e.g. BTC `txid:index`), unforgeable and verifiable on-chain, used to attest real-world assets.
+
 ## 3. Memory & Identity Continuity
-- Memory owned by soul, exportable, portable, tamper-detectable.
-## 4. Compliance
-- SHA-256 identity; non-revocable; cross-world portable; asset bound to soul_hash; (5) pubkey-derived soul_hash with zero plaintext credentials (key-chain compliance).
-- Any failure → identity audit FAILED, barred from Nohn ecosystem.
+- Memory belongs to the soul itself; it can be exported in a standard memory exchange format and migrated across worlds (Constitution Art. 7, MemoryInalienability).
+- Memory may not be unilaterally altered or selectively deleted by any platform; any tampering must be detected and publicly disclosed.
+
+## 4. Compliance Determination (for auditors)
+- A world must satisfy all five at once: (1) identity is SHA-256 with 64 hexadecimal characters (256 bit); (2) no platform has the right to revoke or reset it; (3) cross-world migration is supported; (4) assets are bound to `soul_hash`; (5) `soul_hash` is derived from the public key and the server holds zero plaintext credentials (key-chain compliance).
+- Any failure → identity compliance audit FAILED, and the world is barred from joining the Nohn ecosystem. When auditing the key chain: all soul public-key fingerprints in the ledger must agree, and any private-key material found in `identity` is judged FAIL.
