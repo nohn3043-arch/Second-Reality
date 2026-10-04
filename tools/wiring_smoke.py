@@ -1,9 +1,9 @@
 """Wiring smoke test: account abstraction / key rotation / identity root / soul roaming.
 
-验证四个模块接线进主流程后的端到端行为（直接调用 WorldAPI.dispatch，
-与 smoke_test.py 同一风格，不依赖真实网络）。
+End-to-end behaviour of four modules wired into the main flow (calling WorldAPI.dispatch directly,
+same style as smoke_test.py, no real network required).
 
-运行：python tools/wiring_smoke.py
+Run: python tools/wiring_smoke.py
 """
 import sys
 sys.path.insert(0, ".")
@@ -38,7 +38,7 @@ def check(name, cond, detail=""):
 
 
 def spawn_and_login(world: World, api: WorldAPI):
-    """创世 + 挑战登录，返回 (soul_hash, keypair, access_token)。"""
+    """Genesis + challenge login; returns (soul_hash, keypair, access_token)."""
     kp = generate_user_keypair()
     proof = build_genesis_proof(
         kp["secret"], {"name": "wiring-soul", "ts": int(time.time())}
@@ -64,7 +64,7 @@ def main():
     auth = {"token": token}
     print(f"login ok: soul={soul[:16]}...")
 
-    # ── 1. 账户抽象：签发 / 挑战 / 执行 / 约束 / 吊销 ──────────
+    # -- 1. Account abstraction: issue / challenge / execute / constrain / revoke ----
     print("\n[1] account_abstraction")
     sk_kp = generate_user_keypair()
     sk_pub_b64 = base64.b64encode(sk_kp["pubkey"]).decode("ascii")
@@ -99,7 +99,7 @@ def main():
     check("execute via session key (no master token)", status == 200, str(payload))
     check("spend recorded", payload.get("spent_amount") == 30.0, str(payload))
 
-    # nonce 一次性：重放必须失败
+    # nonce is single-use: replay must fail
     status, payload = api.dispatch(
         "POST", "/aa/execute",
         {"key_id": key_id, "nonce": nonce, "signature": sig,
@@ -108,7 +108,7 @@ def main():
     )
     check("nonce replay rejected", status == 403, str(payload))
 
-    # 新挑战：超额度必须失败（已花 30，上限 100，再花 80 → 拒绝）
+    # new challenge: exceeding the budget must fail (30 spent, cap 100, spending 80 more -> rejected)
     nonce2 = api.dispatch("POST", "/aa/challenge", {"key_id": key_id}, token=None)[1]["nonce"]
     sig2 = base64.b64encode(
         sign_with_device(sk_kp["secret"], nonce2.encode("utf-8"))
@@ -121,7 +121,7 @@ def main():
     )
     check("spend limit enforced", status == 403, str(payload))
 
-    # 范围约束：非白名单动作拒绝
+    # scope constraint: actions outside the allow-list are rejected
     nonce3 = api.dispatch("POST", "/aa/challenge", {"key_id": key_id}, token=None)[1]["nonce"]
     sig3 = base64.b64encode(
         sign_with_device(sk_kp["secret"], nonce3.encode("utf-8"))
@@ -134,7 +134,7 @@ def main():
     )
     check("action scope enforced", status == 403, str(payload))
 
-    # 主身份吊销会话密钥 → 执行失败
+    # root identity revokes the session key -> execution fails
     status, payload = api.dispatch(
         "POST", "/aa/keys/revoke", {"key_id": key_id}, **auth
     )
@@ -151,7 +151,7 @@ def main():
     )
     check("revoked key cannot execute", status == 403, str(payload))
 
-    # ── 2. 密钥轮换：retired 验旧 / revoked 杀旧 ──────────────
+    # -- 2. Key rotation: retired still verifies / revoked kills ----
     print("\n[2] key_rotation")
     status, payload = api.dispatch("GET", "/keys", {}, **auth)
     check("list keys (no material)", status == 200 and "key_bytes" not in str(payload), str(payload))
@@ -162,18 +162,18 @@ def main():
     new_kid = world.key_rotation.get_active_key().key_id
     check("active key changed", old_kid != new_kid)
 
-    # 旧 token（旧密钥签发，已 retired）仍可验证
+    # an old token (signed by the now-retired key) still verifies
     still = world.sessions.verify(token, credential_vault=world.credentials)
     check("old token still valid (retired key verifies)", still == soul)
 
-    # 新签发的 token 用新 kid
+    # newly issued tokens carry the new kid
     access2, _ = world.sessions.issue(soul)
     import json as _json
     import base64 as _b64
     payload2 = _json.loads(_b64.urlsafe_b64decode(access2.split(".")[0]))
     check("new token carries new kid", payload2.get("kid") == new_kid)
 
-    # 紧急吊销旧密钥 → 旧 token 即刻失效，新 token 不受影响
+    # emergency revocation of the old key -> old tokens die at once, new tokens unaffected
     status, payload = api.dispatch(
         "POST", "/keys/revoke", {"key_id": old_kid}, **auth
     )
@@ -182,9 +182,9 @@ def main():
     check("old token dead after revoke", dead is None)
     alive = world.sessions.verify(access2, credential_vault=world.credentials)
     check("new token unaffected", alive == soul)
-    auth = {"token": access2}  # 旧密钥已吊销，后续用新密钥签发的 token
+    auth = {"token": access2}  # old key revoked; subsequent calls use the new key
 
-    # ── 3. 身份根：生成 / 分片恢复 ────────────────────────────
+    # -- 3. Identity root: generation / shard recovery ----
     print("\n[3] identity_root")
     status, payload = api.dispatch(
         "POST", "/identity/root/generate", {"threshold": 3, "num_shares": 5}, **auth
@@ -194,22 +194,22 @@ def main():
     check("soul_hash = SHA-256(master pubkey)",
           payload["soul_hash"] == __import__("hashlib").sha256(master_pub).hexdigest())
     check("share count", len(payload["shares"]) == 5)
-    # 服务端零落盘：shares 不进任何存储
+    # zero server-side persistence: shares never enter any storage
     tables = world.storage.query(
         "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%identity%'"
     ) if world.storage_backend != "memory" else []
     check("no identity root persisted server-side", len(tables) == 0, str(tables))
-    # 凑齐 threshold 份重建 → 派生公钥一致
+    # reconstruct from threshold shares -> derived public key matches
     shares = [(int(s["x"]), int(s["y"], 16)) for s in payload["shares"][:3]]
     recovered = shamir_combine(shares)
     check("shamir(3,5) recover -> same pubkey",
           public_from_private(recovered) == master_pub)
 
-    # ── 4. 灵魂漫游：源世界签发 / 目标世界验证映射 ──────────────
+    # -- 4. Soul roaming: issue in the source world / verify and map in the target ----
     print("\n[4] soul_roaming")
     world_a, world_b = world, World("wiring-smoke-target", data_dir=None)
     api_b = WorldAPI(world_b)
-    # 互通注册：A 认识 B 的公钥，B 认识 A 的公钥
+    # mutual registration: A knows B's public key, B knows A's
     a_pub = world_a.roaming._world_public_key
     b_pub = world_b.roaming._world_public_key
     status, payload = api.dispatch(
@@ -221,7 +221,7 @@ def main():
     check("target world registered in source", status == 201, str(payload))
     world_b.roaming.register_world("wiring-smoke", a_pub)
 
-    # A 为灵魂签发漫游证书（目标 = B）
+    # A issues a roaming certificate for the soul (target = B)
     status, payload = api.dispatch(
         "POST", "/roaming/certificates",
         {"target_world_id": "wiring-smoke-target"},
@@ -230,10 +230,10 @@ def main():
     check("issue roaming certificate", status == 201, str(payload))
     cert = payload["certificate"]
 
-    # 用户在 B 世界也注册一个本地灵魂（用于映射目标）
+    # the user registers a local soul in world B (as the mapping target)
     soul_b, kp_b, token_b = spawn_and_login(world_b, api_b)
 
-    # 篡改检测：改掉声誉字段后签名应失效
+    # tamper detection: altering the reputation field must invalidate the signature
     tampered = dict(cert)
     tampered["identity_proof"] = dict(cert["identity_proof"])
     tampered["identity_proof"]["reputation_score"] = 9999
@@ -244,7 +244,7 @@ def main():
     check("tampered cert fails signature check",
           status == 200 and payload["valid"] is False, str(payload))
 
-    # 正确证书：验证 + 挑战-响应（用户持私钥）+ 映射
+    # valid certificate: verify + challenge-response (user holds the key) + map
     nonce_r = api_b.auth.issue_challenge(soul_b, ip="127.0.0.1")
     sig_r = base64.b64encode(
         sign_with_device(kp["secret"], nonce_r.encode("utf-8"))
@@ -272,7 +272,7 @@ def main():
     check("lookup mapping returns local soul",
           status == 200 and payload["local_soul_hash"] == soul_b, str(payload))
 
-    # ── 回归：tick 钩子不破坏主循环 ────────────────────────────
+    # -- regression: the tick hook does not break the main loop ----
     print("\n[5] regression")
     result = world.tick()
     check("world.tick() still runs", isinstance(result, dict))

@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""Reality baseline smoke test — law/Physics baseline standard V3.0 (R1–R5).
+"""Reality baseline smoke test - law/Physics baseline standard V3.0 (R1-R5).
 
-主题：虚拟世界必须是一个真实的世界。
+Subject: a virtual world must be a real world.
 
-真实性是结构性属性——描述规则如何被设定与被执行，不描述规则的具体内容。
-本脚本验证该判据集的可执行性，覆盖：
+Reality is a structural property: it describes how rules are set and enforced,
+not what the rules say. This script verifies that the criterion set is
+executable. It covers:
 
-  [1] R1 创世锁定    注入即锁；构造注入亦锁；事后覆写被拒
-  [2] R2 全域一致    未声明的世界判 False（fail-closed）
-  [3] R3 因果闭合    未声明「无外部注入通道」判 False
-  [4] R4 公示即执行  承诺哈希可被第三方重算；不一致即判 False
-  [5] R5 反应表完备  未声明判 False
-  [6] 门禁           reality 维度进入 ProtocolValidator，且不吞并 physics
-  [7] 公投           fail-closed / 阈值 / 通过
-  [8] 分叉           父世界不被改写；子世界同样受 R1 约束
+  [1] R1 genesis lock       locked on injection; locked on construction; later overwrite rejected
+  [2] R2 global consistency an undeclared world is judged False (fail-closed)
+  [3] R3 causal closure     an undeclared "no exogenous injection" channel is judged False
+  [4] R4 published as executed  the commitment hash is recomputable by a third party; a mismatch is judged False
+  [5] R5 reaction-table completeness  undeclared is judged False
+  [6] Gate                  the reality dimension enters ProtocolValidator without subsuming physics
+  [7] Referendum            fail-closed / threshold / passage
+  [8] Fork                  the parent world is not modified; the child is itself bound by R1
 
-运行：python tools/reality_smoke.py
+Run: python tools/reality_smoke.py
 """
 import sys
 sys.path.insert(0, ".")
@@ -35,10 +36,10 @@ def check(name, cond, detail=""):
     global _passed, _failed
     if cond:
         _passed += 1
-        print(f"  [PASS] {name}" + (f" — {detail}" if detail else ""))
+        print(f"  [PASS] {name}" + (f" - {detail}" if detail else ""))
     else:
         _failed += 1
-        print(f"  [FAIL] {name}" + (f" — {detail}" if detail else ""))
+        print(f"  [FAIL] {name}" + (f" - {detail}" if detail else ""))
 
 
 def base_physics(**over):
@@ -57,81 +58,81 @@ def base_physics(**over):
 
 
 print("=" * 68)
-print("真实性基准冒烟测试 · law/Physics baseline standard V3.0 (R1–R5)")
+print("Reality baseline smoke test - law/Physics baseline standard V3.0 (R1-R5)")
 print("=" * 68)
 
-# ── [1] R1 创世锁定 ─────────────────────────────────────────────
-print("\n[1] R1 创世锁定")
+# -- [1] R1 genesis lock ------------------------------------------------
+print("\n[1] R1 genesis lock")
 w = ImmutableWorldRule(world_id="world-luna")
-check("创世前未锁定", w._physics_locked is False)
-check("创世注入成功", w.set_physics_constants(
+check("not locked before genesis", w._physics_locked is False)
+check("genesis injection succeeds", w.set_physics_constants(
     {"gravity": 1.62, "time_dilation": 1.0, "unit_scale": "metric",
      "element_reactions": {}}) is True)
-check("注入即锁定", w._physics_locked is True)
-check("事后覆写被拒", w.set_physics_constants(
+check("locked on injection", w._physics_locked is True)
+check("later overwrite rejected", w.set_physics_constants(
     {"gravity": 9.80665, "time_dilation": 1.0, "unit_scale": "metric",
      "element_reactions": {}}) is False)
-check("原常数保持", w.physics_constants["gravity"] == 1.62,
+check("original constants preserved", w.physics_constants["gravity"] == 1.62,
       f"gravity={w.physics_constants['gravity']}")
 
 w2 = ImmutableWorldRule(
     physics_constants={"gravity": 3.7, "time_dilation": 2.0,
                        "unit_scale": "lunar", "element_reactions": {}},
     world_id="world-mars")
-check("构造注入即锁（修补旧 R1 通道）", w2._physics_locked is True)
-check("构造注入后亦不可覆写", w2.set_physics_constants(
+check("genesis lock engaged by construction (old R1 bypass closed)", w2._physics_locked is True)
+check("constants not overwritable after construction", w2.set_physics_constants(
     {"gravity": 9.8, "time_dilation": 1.0, "unit_scale": "metric",
      "element_reactions": {}}) is False)
 
-# ── [2]~[5] 逐条判据 ────────────────────────────────────────────
+# -- [2]-[5] criterion by criterion -------------------------------------
 pb = PhysicsBaseline()
 
-print("\n[2] R2 全域一致")
-check("声明一致 → 通过", pb.reality_compliant(base_physics())["R2_global_consistency"])
-check("未声明 → 拒绝（fail-closed）",
+print("\n[2] R2 global consistency")
+check("declared consistent -> pass", pb.reality_compliant(base_physics())["R2_global_consistency"])
+check("undeclared -> rejected (fail-closed)",
       pb.reality_compliant(base_physics(constants_globally_consistent=False))
       ["R2_global_consistency"] is False)
 
-print("\n[3] R3 因果闭合")
-check("声明无外部注入 → 通过", pb.reality_compliant(base_physics())["R3_causal_closure"])
-check("允许外部注入 → 拒绝",
+print("\n[3] R3 causal closure")
+check("no exogenous injection declared -> pass", pb.reality_compliant(base_physics())["R3_causal_closure"])
+check("exogenous injection permitted -> rejected",
       pb.reality_compliant(base_physics(no_exogenous_injection=False))
       ["R3_causal_closure"] is False)
 
-print("\n[4] R4 公示即执行")
+print("\n[4] R4 published as executed")
 two_sided = pb.reality_compliant(base_physics())["R4_published_equals_executed"]
-check("两侧一致 → 通过", two_sided is True)
-check("两侧不一致 → 拒绝",
+check("both sides equal -> pass", two_sided is True)
+check("sides disagree -> rejected",
       pb.reality_compliant(base_physics(ledger_commitment="sha256:xyz"))
       ["R4_published_equals_executed"] is False)
-check("仅一侧存在 → 拒绝",
+check("only one side present -> rejected",
       pb.reality_compliant(base_physics(ledger_commitment=None))
       ["R4_published_equals_executed"] is False)
-check("承诺哈希可第三方重算",
+check("commitment hash recomputable by a third party",
       ImmutableWorldRule(physics_constants={
           "gravity": 3.7, "time_dilation": 2.0, "unit_scale": "lunar",
           "element_reactions": {}}).commitment()
       == ImmutableWorldRule(physics_constants={
           "unit_scale": "lunar", "gravity": 3.7, "time_dilation": 2.0,
           "element_reactions": {}}).commitment(),
-      "键序不影响哈希")
+      "key order does not affect the hash")
 
-print("\n[5] R5 反应表完备")
-check("声明完备 → 通过", pb.reality_compliant(base_physics())["R5_reaction_table_complete"])
-check("未声明 → 拒绝（fail-open 禁止）",
+print("\n[5] R5 reaction-table completeness")
+check("declared complete -> pass", pb.reality_compliant(base_physics())["R5_reaction_table_complete"])
+check("undeclared -> rejected (fail-open prohibited)",
       pb.reality_compliant(base_physics(reaction_table_complete=False))
       ["R5_reaction_table_complete"] is False)
 
-print("\n[5b] 全判据组合")
-check("全部满足 → is_real=True", pb.is_real(base_physics()) is True)
-check("任一不满足 → is_real=False",
+print("\n[5b] all criteria combined")
+check("all satisfied -> is_real=True", pb.is_real(base_physics()) is True)
+check("any unmet -> is_real=False",
       pb.is_real(base_physics(no_exogenous_injection=False)) is False)
-check("裸配置 → 五条全失败",
+check("bare configuration -> all five fail",
       len(pb.reality_failures({"gravity": 3.7})) == 5,
       str(pb.reality_failures({"gravity": 3.7})))
 
-# ── [6] 门禁 ────────────────────────────────────────────────────
-print("\n[6] 门禁：reality 维度进入 ProtocolValidator")
+# -- [6] admission gate -------------------------------------------------
+print("\n[6] Gate: the reality dimension enters ProtocolValidator")
 pv = ProtocolValidator()
 full = {
     "semantics": {"uses_nohn_semantics": True, "unknown_downgraded": True,
@@ -144,60 +145,61 @@ full = {
                 "asset_bound_to_soul": True, "oracle_sources": ["a", "b", "c"]},
 }
 ok, fails = pv.validate(full)
-check("完整配置 → 通过", ok is True and fails == [], f"failures={fails}")
+check("complete configuration -> pass", ok is True and fails == [], f"failures={fails}")
 
 dims = pv.validate_dict(full)
-check("五维度齐备", set(dims) == {"communication", "physics", "reality",
+check("all five dimensions present", set(dims) == {"communication", "physics", "reality",
                                 "identity", "economy"}, str(sorted(dims)))
 
 partial = dict(full)
 partial["physics"] = {"gravity": 3.7, "time_dilation": 2.0,
                       "unit_scale": "lunar", "no_dimensional_inflation": True}
 ok2, fails2 = pv.validate(partial)
-check("仅声明常数 → physics 过、reality 拒", fails2 == ["reality"], str(fails2))
-check("非地球重力不再被 physics 判死",
-      pv.validate_dict(partial)["physics"] is True, "真实来自不变性，不来自与地球同值")
-check("R1–R5 逐条定位可用",
+check("constants only -> physics passes, reality rejects", fails2 == ["reality"], str(fails2))
+check("a non-Earth gravity is no longer rejected by physics",
+      pv.validate_dict(partial)["physics"] is True,
+      "reality comes from invariance, not from matching Earth")
+check("per-criterion localisation available",
       all(v is False for v in pv.validate_reality_detail(partial).values()))
 
-# ── [7] 公投 ────────────────────────────────────────────────────
-print("\n[7] 全球公投")
-check("无投票记录 → 驳回（fail-closed）",
+# -- [7] referendum -----------------------------------------------------
+print("\n[7] Global referendum")
+check("no ballot record -> rejected (fail-closed)",
       w.propose_amendment({"gravity": 3.7}, "citizen-1") is False)
-check("驳回原因已留档",
+check("rejection reason recorded",
       w.rule_modification_log[-1]["reason"] == "no vote record (fail-closed)")
-check("赞成率 0.60 < 2/3 → 驳回",
+check("approval 0.60 < 2/3 -> rejected",
       w.propose_amendment({"gravity": 3.7}, "citizen-1",
                           {"eligible": 100, "approve": 60, "reject": 40}) is False)
-check("阈值记录在案",
+check("threshold recorded",
       w.rule_modification_log[-1]["threshold"] == CONSENSUS_THRESHOLD)
-check("公投通过 → True",
+check("referendum passes -> True",
       w.propose_amendment({"gravity": 3.7}, "citizen-1",
                           {"eligible": 100, "approve": 90, "reject": 10}) is True)
-check("原始计数留档（可换基准重算）",
+check("raw counts recorded (recomputable against another baseline)",
       w.rule_modification_log[-1]["ballot"]["approve"] == 90)
 
-# ── [8] 分叉 ────────────────────────────────────────────────────
-print("\n[8] 分叉：变更唯一路径")
+# -- [8] fork -----------------------------------------------------------
+print("\n[8] Fork: the only amendment path")
 rec = w.fork_registry[-1]
-check("分叉已登记", rec["status"] == "forked", rec["fork_id"])
-check("父世界未被改写", rec["parent_untouched"] is True)
-check("父世界常数保持 1.62", w.physics_constants["gravity"] == 1.62,
+check("fork registered", rec["status"] == "forked", rec["fork_id"])
+check("parent world unmodified", rec["parent_untouched"] is True)
+check("parent constants remain 1.62", w.physics_constants["gravity"] == 1.62,
       f"gravity={w.physics_constants['gravity']}")
-check("子世界收到新常数", rec["child_constants"]["gravity"] == 3.7)
-check("迁移为自愿（不自动搬迁）", rec["requires_migration"] is True)
-check("父/子承诺哈希不同",
+check("child world receives the new constants", rec["child_constants"]["gravity"] == 3.7)
+check("migration is voluntary (no automatic relocation)", rec["requires_migration"] is True)
+check("parent and child commitment hashes differ",
       rec["parent_commitment"] != rec["child_commitment"])
-check("父世界承诺哈希与当前一致",
+check("parent commitment hash matches current state",
       rec["parent_commitment"] == w.commitment())
-check("二次分叉编号递增",
+check("second fork increments the identifier",
       w._fork_world({"gravity": 9.8})["fork_id"] == "world-luna-fork-002")
-check("分叉簿只增不删", len(w.fork_registry) == 2)
+check("fork registry is append-only", len(w.fork_registry) == 2)
 
 print("\n" + "=" * 68)
 if _failed == 0:
-    print(f"ALL PASS — {_passed} checks")
+    print(f"ALL PASS - {_passed} checks")
 else:
-    print(f"FAILED — {_failed} of {_passed + _failed} checks failed")
+    print(f"FAILED - {_failed} of {_passed + _failed} checks failed")
 print("=" * 68)
 sys.exit(1 if _failed else 0)
