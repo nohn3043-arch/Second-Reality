@@ -93,6 +93,57 @@ serve(world, host="0.0.0.0", port=8000)
 
 ## ✦ Architecture
 
+> **In one sentence:** a stack that keeps the **rules** (read-only), the **referee** (a neutral auditor), the **implementation**, and the **demo** strictly apart — so a virtual world can be trusted like a real one.
+
+```mermaid
+flowchart TB
+    subgraph L1["📜 Layer 1 — Rules (read-only · the trust root)"]
+        A1["Constitution<br/>axioms + ten governance laws"]
+        A2["Law<br/>communication · economy · identity ·<br/>reality baseline R1–R5"]
+    end
+
+    subgraph L2["⚙️ Layer 2 — Implementation (the code that actually runs · system/, 23 modules)"]
+        B1["🧾 Ledger & consensus<br/>hash-chained record · ≥2/3 referendum"]
+        B2["🤖 Agent engine<br/>need-driven decisions · memory sealing"]
+        B3["🔑 Account system<br/>credential → session → authorization → recovery"]
+        B4["🌐 Geo-distributed & edge<br/>clock sync · spatial sharding · offline autonomy"]
+    end
+
+    subgraph L3["⚖️ Layer 3 — Referee (neutral audit)"]
+        C["🔍 Second Perspective auditor<br/>19-dimension compliance review,<br/>runnable against any world"]
+    end
+
+    subgraph L4["🛃 Layer 4 — Bridge (customs for legacy worlds)"]
+        D["Compatibility bridge<br/>semantic cleansing · physics constants · soul verification"]
+    end
+
+    A1 --> A2
+    A2 --> B1
+    D --> B1
+    B1 --> C
+    B2 --> C
+    B3 --> C
+    B4 --> C
+    C --> OUT["✅ A world that behaves like a real world:<br/>rules locked at genesis, actually enforced, independently verifiable"]
+
+    classDef cRule fill:#EFE7D2,stroke:#C9A96E,stroke-width:1px,color:#5B4614
+    classDef cImpl fill:#E8F0FE,stroke:#4285F4,stroke-width:1px,color:#173A66
+    classDef cJudge fill:#F3E8FD,stroke:#8E44AD,stroke-width:1px,color:#4A235A
+    classDef cOut fill:#E6F4EA,stroke:#34A853,stroke-width:1px,color:#14512B
+    class A1,A2 cRule
+    class B1,B2,B3,B4 cImpl
+    class C,D cJudge
+    class OUT cOut
+```
+
+**How to read it**
+
+1. **Rules first.** The constitution and the laws sit at the top and are read-only — nobody, including the operator, can edit them behind the scenes.
+2. **Then the machinery.** `system/` is the part that actually runs: ledger, consensus, agents, accounts, geo-distribution.
+3. **A neutral referee always watching.** The auditor can be pointed at any world at any time and returns a 19-dimension verdict — it never needs to be trusted, because it can be re-run.
+
+📖 Every term explained in one plain sentence → [Glossary](./GLOSSARY.md)
+
 <div style="max-width: 1100px; margin: 0 auto; padding: 0 16px; font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; color: #2b2b2b; line-height: 1.8;">
 
 The stack keeps rules (read-only), the auditor (neutral referee), the implementation, and the demo strictly separated:

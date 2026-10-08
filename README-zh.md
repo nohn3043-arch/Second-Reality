@@ -93,6 +93,57 @@ serve(world, host="0.0.0.0", port=8000)
 
 ## ✦ 架构
 
+> **一句话：** 把**规则**（只读）、**裁判**（中立审计器）、**实现**与**演示**严格分开——这样虚拟世界才能像真实世界一样被信任。
+
+```mermaid
+flowchart TB
+    subgraph L1["📜 第一层 · 规则（只读 · 信任根）"]
+        A1["宪法 Constitution<br/>公理 + 十条治理法"]
+        A2["法律 Law<br/>通信 · 经济 · 身份 ·<br/>现实基线 R1–R5"]
+    end
+
+    subgraph L2["⚙️ 第二层 · 实现（真正在跑的代码 · system/ 23 个模块）"]
+        B1["🧾 账本与共识<br/>哈希链存档 · ≥2/3 公投"]
+        B2["🤖 智能体引擎<br/>需求驱动决策 · 记忆固化"]
+        B3["🔑 账号体系<br/>凭证 → 会话 → 授权 → 找回"]
+        B4["🌐 跨地域与边缘<br/>时钟同步 · 空间分片 · 断网自持"]
+    end
+
+    subgraph L3["⚖️ 第三层 · 裁判（中立审计）"]
+        C["🔍 第二视角审计器<br/>19 维合规体检，<br/>可对任意世界随时运行"]
+    end
+
+    subgraph L4["🛃 第四层 · 桥（旧世界入境海关）"]
+        D["兼容桥<br/>语义清洗 · 物理常数核验 · 身份核验"]
+    end
+
+    A1 --> A2
+    A2 --> B1
+    D --> B1
+    B1 --> C
+    B2 --> C
+    B3 --> C
+    B4 --> C
+    C --> OUT["✅ 一个「像真实世界」的世界：<br/>规则创世锁定、确实被执行、可被独立复验"]
+
+    classDef cRule fill:#EFE7D2,stroke:#C9A96E,stroke-width:1px,color:#5B4614
+    classDef cImpl fill:#E8F0FE,stroke:#4285F4,stroke-width:1px,color:#173A66
+    classDef cJudge fill:#F3E8FD,stroke:#8E44AD,stroke-width:1px,color:#4A235A
+    classDef cOut fill:#E6F4EA,stroke:#34A853,stroke-width:1px,color:#14512B
+    class A1,A2 cRule
+    class B1,B2,B3,B4 cImpl
+    class C,D cJudge
+    class OUT cOut
+```
+
+**这张图怎么看**
+
+1. **规则在最上面，而且是只读的。** 宪法和法律锁死——运营方也无法在后台偷偷改。
+2. **中间才是干活的机器。** `system/` 是真正运行的部分：账本、共识、智能体、账号、跨地域。
+3. **始终有个中立裁判盯着。** 审计器可对任意世界随时跑一遍，给出 19 维结论——它不需要你信任，因为你可以自己重跑。
+
+📖 每个术语都用一句人话解释 → [术语表 GLOSSARY](./GLOSSARY.md)
+
 <div style="max-width: 1100px; margin: 0 auto; padding: 0 16px; font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; color: #2b2b2b; line-height: 1.8;">
 
 本栈将规则（只读）、审计器（中立裁判）、实现与演示严格分离：
