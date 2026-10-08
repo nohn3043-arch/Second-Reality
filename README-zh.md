@@ -93,54 +93,72 @@ serve(world, host="0.0.0.0", port=8000)
 
 ## ✦ 架构
 
-> **一句话：** 把**规则**（只读）、**裁判**（中立审计器）、**实现**与**演示**严格分开——这样虚拟世界才能像真实世界一样被信任。
+> **一句话：** 一条自上而下的流程——规则创世即锁定，运行中的世界记录并执行它们，而这整套东西任何人都能重跑复验。
 
 ```mermaid
 flowchart TB
-    subgraph L1["📜 第一层 · 规则（只读 · 信任根）"]
-        A1["宪法 Constitution<br/>公理 + 十条治理法"]
-        A2["法律 Law<br/>通信 · 经济 · 身份 ·<br/>现实基线 R1–R5"]
-    end
+    UP["🌍 世界运营者 / 旧世界参与者<br/>发起创世 · 提交事件与要入境的旧世界数据"]
 
-    subgraph L2["⚙️ 第二层 · 实现（真正在跑的代码 · system/ 23 个模块）"]
-        B1["🧾 账本与共识<br/>哈希链存档 · ≥2/3 公投"]
-        B2["🤖 智能体引擎<br/>需求驱动决策 · 记忆固化"]
-        B3["🔑 账号体系<br/>凭证 → 会话 → 授权 → 找回"]
-        B4["🌐 跨地域与边缘<br/>时钟同步 · 空间分片 · 断网自持"]
-    end
+    RULES["📜 constitution_rules.py · constitution.py · law/<br/>写死公理、十条治理法与四套法，创世即锁定为只读信任根"]
 
-    subgraph L3["⚖️ 第三层 · 裁判（中立审计）"]
-        C["🔍 第二视角审计器<br/>19 维合规体检，<br/>可对任意世界随时运行"]
-    end
+    BRIDGE["🛃 compatibility_bridge.py<br/>旧世界入境海关：语义清洗 · 物理常数核验 · 身份核验"]
 
-    subgraph L4["🛃 第四层 · 桥（旧世界入境海关）"]
-        D["兼容桥<br/>语义清洗 · 物理常数核验 · 身份核验"]
-    end
+    RT["🏗️ system/runtime.py<br/>创世时装配世界 · 驱动 tick 循环 · 选择 STORAGE 存储后端"]
 
-    A1 --> A2
-    A2 --> B1
-    D --> B1
-    B1 --> C
-    B2 --> C
-    B3 --> C
-    B4 --> C
-    C --> OUT["✅ 一个「像真实世界」的世界：<br/>规则创世锁定、确实被执行、可被独立复验"]
+    LEDGER["🧾 system/ledger.py<br/>哈希链账本逐笔记录 · ShardRouter 决定 soul_hash 落到哪个分片"]
 
-    classDef cRule fill:#EFE7D2,stroke:#C9A96E,stroke-width:1px,color:#5B4614
-    classDef cImpl fill:#E8F0FE,stroke:#4285F4,stroke-width:1px,color:#173A66
-    classDef cJudge fill:#F3E8FD,stroke:#8E44AD,stroke-width:1px,color:#4A235A
+    CONSENSUS["🗳️ system/consensus.py<br/>达到 ≥2/3 公投后才允许写入账本"]
+
+    AGENT["🤖 system/agent_engine.py<br/>需求驱动智能体行动 · HMAC 封存记忆防篡改"]
+
+    IDENTITY["🔑 system/identity_root · credentials · session · authorization · recovery<br/>L0 身份根 → L1 凭证 → L2 会话 → L3 分级授权 → L4 社交找回"]
+
+    GEO["🌐 system/hlc · spatial_sharding · aoi_sync · partition_guard · hierarchical_consensus · cluster<br/>跨地域时钟 · 空间分片 · AOI 同步 · 分区护栏 · 分层共识 · 集群互联"]
+
+    EDGE["📡 system/edge_sdk · soul_roaming<br/>边缘 SDK 断网自持 · 让灵魂跨节点漫游"]
+
+    API["🚪 system/api.py<br/>REST 路由 + WebSocket 实时世界流 · 对外服务入口"]
+
+    AUDIT["⚖️ audit_engine.py<br/>第二视角 19 维合规审查 · 可对任意世界随时重跑"]
+
+    DEMO["🧪 virtual_world.py · smoke_test.py · tools/ · expert_report.py<br/>跑演示世界 · 冒烟测试 · 验证工具 · 专家报告"]
+
+    OUT["✅ 一个可被独立复验的世界<br/>规则创世锁定、确实被执行、任何人可重算"]
+
+    HUMAN["✍️ 人工复验 / 世界上线签字<br/>最终信任留在算法之外"]
+
+    UP --> RULES
+    RULES --> BRIDGE
+    BRIDGE --> RT
+    RT --> LEDGER
+    LEDGER --> CONSENSUS
+    CONSENSUS --> AGENT
+    AGENT --> IDENTITY
+    IDENTITY --> GEO
+    GEO --> EDGE
+    EDGE --> API
+    API --> AUDIT
+    AUDIT --> DEMO
+    DEMO --> OUT
+    OUT --> HUMAN
+
+    classDef cUp fill:#F5F5F5,stroke:#9E9E9E,stroke-width:1px,color:#424242
+    classDef cIn fill:#E8F0FE,stroke:#4285F4,stroke-width:1px,color:#173A66
+    classDef cCore fill:#FFF8E1,stroke:#C9A96E,stroke-width:1px,color:#5B4614
+    classDef cSide fill:#F3E8FD,stroke:#8E44AD,stroke-width:1px,color:#4A235A
     classDef cOut fill:#E6F4EA,stroke:#34A853,stroke-width:1px,color:#14512B
-    class A1,A2 cRule
-    class B1,B2,B3,B4 cImpl
-    class C,D cJudge
-    class OUT cOut
+    class UP cUp
+    class BRIDGE,API cIn
+    class RULES,RT,LEDGER,CONSENSUS,AGENT,IDENTITY,GEO cCore
+    class EDGE,AUDIT,DEMO cSide
+    class OUT,HUMAN cOut
 ```
 
 **这张图怎么看**
 
-1. **规则在最上面，而且是只读的。** 宪法和法律锁死——运营方也无法在后台偷偷改。
-2. **中间才是干活的机器。** `system/` 是真正运行的部分：账本、共识、智能体、账号、跨地域。
-3. **始终有个中立裁判盯着。** 审计器可对任意世界随时跑一遍，给出 19 维结论——它不需要你信任，因为你可以自己重跑。
+1. 从上往下读就是一条流程：运营者锁死规则 → 旧世界过海关入境 → 运行时装配并跑起世界 → 最终产出一个可被独立复验的世界，交人工签字上线。
+2. 每个框第一行都是真实模块路径（`constitution_rules.py`、`system/runtime.py`、`system/ledger.py`、`audit_engine.py` …），可以直接对着图翻源码。
+3. 最关键的边界：规则层**只读、创世锁定**；审计器不需要你信任——因为它随时可以重跑。
 
 📖 每个术语都用一句人话解释 → [术语表 GLOSSARY](./GLOSSARY.md)
 

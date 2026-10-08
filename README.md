@@ -93,54 +93,72 @@ serve(world, host="0.0.0.0", port=8000)
 
 ## ✦ Architecture
 
-> **In one sentence:** a stack that keeps the **rules** (read-only), the **referee** (a neutral auditor), the **implementation**, and the **demo** strictly apart — so a virtual world can be trusted like a real one.
+> **In one sentence:** one vertical flow — the rules are frozen at genesis, the running world records and enforces them, and the whole thing can be re-run and re-verified by anyone.
 
 ```mermaid
 flowchart TB
-    subgraph L1["📜 Layer 1 — Rules (read-only · the trust root)"]
-        A1["Constitution<br/>axioms + ten governance laws"]
-        A2["Law<br/>communication · economy · identity ·<br/>reality baseline R1–R5"]
-    end
+    UP["🌍 World operator / legacy-world participants<br/>start genesis · submit events and legacy-world data"]
 
-    subgraph L2["⚙️ Layer 2 — Implementation (the code that actually runs · system/, 23 modules)"]
-        B1["🧾 Ledger & consensus<br/>hash-chained record · ≥2/3 referendum"]
-        B2["🤖 Agent engine<br/>need-driven decisions · memory sealing"]
-        B3["🔑 Account system<br/>credential → session → authorization → recovery"]
-        B4["🌐 Geo-distributed & edge<br/>clock sync · spatial sharding · offline autonomy"]
-    end
+    RULES["📜 constitution_rules.py · constitution.py · law/<br/>freeze the axioms, ten governance laws and the four law sets as a read-only trust root"]
 
-    subgraph L3["⚖️ Layer 3 — Referee (neutral audit)"]
-        C["🔍 Second Perspective auditor<br/>19-dimension compliance review,<br/>runnable against any world"]
-    end
+    BRIDGE["🛃 compatibility_bridge.py<br/>legacy-world customs: semantic cleansing · physics-constant check · soul-hash check"]
 
-    subgraph L4["🛃 Layer 4 — Bridge (customs for legacy worlds)"]
-        D["Compatibility bridge<br/>semantic cleansing · physics constants · soul verification"]
-    end
+    RT["🏗️ system/runtime.py<br/>assemble the world at genesis · drive the tick loop · pick the STORAGE backend"]
 
-    A1 --> A2
-    A2 --> B1
-    D --> B1
-    B1 --> C
-    B2 --> C
-    B3 --> C
-    B4 --> C
-    C --> OUT["✅ A world that behaves like a real world:<br/>rules locked at genesis, actually enforced, independently verifiable"]
+    LEDGER["🧾 system/ledger.py<br/>hash-chained ledger of every record · ShardRouter decides which shard a soul_hash lands in"]
 
-    classDef cRule fill:#EFE7D2,stroke:#C9A96E,stroke-width:1px,color:#5B4614
-    classDef cImpl fill:#E8F0FE,stroke:#4285F4,stroke-width:1px,color:#173A66
-    classDef cJudge fill:#F3E8FD,stroke:#8E44AD,stroke-width:1px,color:#4A235A
+    CONSENSUS["🗳️ system/consensus.py<br/>a write is allowed only after a ≥2/3 referendum"]
+
+    AGENT["🤖 system/agent_engine.py<br/>need-driven agents act · HMAC seals memory against tampering"]
+
+    IDENTITY["🔑 system/identity_root · credentials · session · authorization · recovery<br/>L0 identity root → L1 credential → L2 session → L3 tiered authorization → L4 social recovery"]
+
+    GEO["🌐 system/hlc · spatial_sharding · aoi_sync · partition_guard · hierarchical_consensus · cluster<br/>cross-region clock · spatial shards · AOI sync · partition guard · hierarchical consensus · cluster mesh"]
+
+    EDGE["📡 system/edge_sdk · soul_roaming<br/>edge SDK keeps running offline · souls roam across nodes"]
+
+    API["🚪 system/api.py<br/>REST routes + WebSocket live world stream · the service entry"]
+
+    AUDIT["⚖️ audit_engine.py<br/>second-perspective 19-dimension compliance audit · re-runnable against any world, any time"]
+
+    DEMO["🧪 virtual_world.py · smoke_test.py · tools/ · expert_report.py<br/>run a demo world · smoke tests · verification tools · expert report"]
+
+    OUT["✅ A world that can be independently re-verified<br/>rules locked at genesis, actually enforced, recomputable by anyone"]
+
+    HUMAN["✍️ Human re-check / launch sign-off<br/>the final trust stays outside the algorithm"]
+
+    UP --> RULES
+    RULES --> BRIDGE
+    BRIDGE --> RT
+    RT --> LEDGER
+    LEDGER --> CONSENSUS
+    CONSENSUS --> AGENT
+    AGENT --> IDENTITY
+    IDENTITY --> GEO
+    GEO --> EDGE
+    EDGE --> API
+    API --> AUDIT
+    AUDIT --> DEMO
+    DEMO --> OUT
+    OUT --> HUMAN
+
+    classDef cUp fill:#F5F5F5,stroke:#9E9E9E,stroke-width:1px,color:#424242
+    classDef cIn fill:#E8F0FE,stroke:#4285F4,stroke-width:1px,color:#173A66
+    classDef cCore fill:#FFF8E1,stroke:#C9A96E,stroke-width:1px,color:#5B4614
+    classDef cSide fill:#F3E8FD,stroke:#8E44AD,stroke-width:1px,color:#4A235A
     classDef cOut fill:#E6F4EA,stroke:#34A853,stroke-width:1px,color:#14512B
-    class A1,A2 cRule
-    class B1,B2,B3,B4 cImpl
-    class C,D cJudge
-    class OUT cOut
+    class UP cUp
+    class BRIDGE,API cIn
+    class RULES,RT,LEDGER,CONSENSUS,AGENT,IDENTITY,GEO cCore
+    class EDGE,AUDIT,DEMO cSide
+    class OUT,HUMAN cOut
 ```
 
 **How to read it**
 
-1. **Rules first.** The constitution and the laws sit at the top and are read-only — nobody, including the operator, can edit them behind the scenes.
-2. **Then the machinery.** `system/` is the part that actually runs: ledger, consensus, agents, accounts, geo-distribution.
-3. **A neutral referee always watching.** The auditor can be pointed at any world at any time and returns a 19-dimension verdict — it never needs to be trusted, because it can be re-run.
+1. Read it top-to-bottom as one flow: an operator locks the rules, legacy worlds pass customs, the runtime assembles and runs the world, and it ends as an independently re-verifiable world that a human signs off on.
+2. Every first line is a real module path — `constitution_rules.py`, `system/runtime.py`, `system/ledger.py`, `audit_engine.py` … — so you can open the source straight from the diagram.
+3. The key boundary: the rule layer is **read-only and locked at genesis**, and the auditor never needs to be trusted, because anyone can re-run it.
 
 📖 Every term explained in one plain sentence → [Glossary](./GLOSSARY.md)
 
