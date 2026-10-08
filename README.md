@@ -62,6 +62,8 @@ python virtual_world.py
 python smoke_test.py            # account/session/recovery security paths — ~1s
 python tools/cluster_smoke.py   # 3-node local geo-distributed cluster — ~14s
 python tools/edge_smoke.py      # AR edge access path — <1s
+python tools/wiring_smoke.py    # account abstraction / key rotation / identity root / roaming — ~2s
+python tools/reality_smoke.py   # reality baseline R1–R5 / onboarding gate / referendum / fork — <1s
 ```
 
 ### Programmatic Launch (Reference World)
@@ -200,6 +202,8 @@ Workload is pure CPU logical simulation (need state machine + SHA-256 hash chain
 | `tools/edge_smoke.py` | Edge device: credential enrollment, challenge login, AOI viewport deltas, nearest-DC routing, cross-DC relocation, revocation | <1s |
 | `tools/wiring_smoke.py` | Account abstraction (session-key issue → challenge → execute → constraints → revoke), key rotation (retired verifies / revoked kills tokens), identity root (Shamir 3-of-5 recovery), soul roaming (issue → tamper rejection → verify → map) | ~2s |
 | `tools/reality_smoke.py` | Reality baseline R1–R5 (genesis lock / global consistency / causal closure / published-as-executed / reaction-table completeness), the `reality` onboarding gate, referendum fail-closed behaviour, and fork-only amendment (parent world left untouched, child world locked) — 40 checks | <1s |
+
+**Designing your own tests?** See **[VERIFICATION.md](VERIFICATION.md)** — a claim inventory, test interfaces, and test-design techniques for independent teams.
 
 **Expert Review Reports** (`expert_report.py`) — exports the auditor's machine-readable verdicts plus ledger hash anchors as a locally reproducible Markdown report (see `reports/`). The report itself is a display layer; every anchor (hash / verdict) points back to re-runnable primitives, so reviewers never need to trust the report.
 

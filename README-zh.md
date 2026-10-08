@@ -62,6 +62,8 @@ python virtual_world.py
 python smoke_test.py            # 账户/会话/恢复 安全路径 —— 约 1 秒
 python tools/cluster_smoke.py   # 3 节点本地地理分布式集群 —— 约 14 秒
 python tools/edge_smoke.py      # AR 边缘接入路径 —— <1 秒
+python tools/wiring_smoke.py    # 账户抽象 / 密钥轮换 / 身份根 / 灵魂漫游 —— 约 2 秒
+python tools/reality_smoke.py   # 真实性基准 R1–R5 / 入驻门禁 / 公投 / 分叉 —— <1 秒
 ```
 
 ### 编程式启动（参考世界）
@@ -200,6 +202,8 @@ STORAGE=postgres DATABASE_URL=postgresql://user:pass@db:5432/world python -m sys
 | `tools/edge_smoke.py` | 边缘设备：凭据登记、挑战登录、AOI 视口增量、最近数据中心路由、跨数据中心迁移、撤销 | <1 秒 |
 | `tools/wiring_smoke.py` | 账户抽象（会话密钥签发 → 挑战 → 执行 → 约束 → 撤销）、密钥轮换（退役可验证 / 撤销即失效）、身份根（Shamir 3-of-5 恢复）、灵魂漫游（签发 → 篡改拒绝 → 验证 → 映射） | 约 2 秒 |
 | `tools/reality_smoke.py` | 真实性基准 R1–R5（创世锁定 / 全域一致 / 因果闭合 / 公示即执行 / 反应表完备）、`reality` 入驻门禁、公投 fail-closed 行为、以及「变更唯一路径是分叉」（父世界不被改写、子世界同样锁定）—— 共 40 项检查 | <1 秒 |
+
+**想自己设计测试？** 见 **[VERIFICATION-zh.md](VERIFICATION-zh.md)** —— 面向独立团队的声明清单、接入接口与测试设计技法。
 
 **专家评审报告**（`expert_report.py`）—— 将审计器的机器可读裁定连同账本哈希锚点导出为本地可复现的 Markdown 报告（见 `reports/`）。报告本身只是展示层；每个锚点（哈希 / 裁定）都指向可重跑的原始操作，因此评审者永远无需信任报告本身。
 
