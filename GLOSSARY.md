@@ -41,6 +41,38 @@
 
 ---
 
+## ✦ English Glossary
+
+*Every term explained in one plain sentence.*
+
+| Term | Plain meaning |
+|---|---|
+| **Constitution** | The world's axioms and ten governance laws, sealed at genesis — nobody can change them. |
+| **NOHN_LAW_AXIOMS** | The single authoritative source for shared values like gravity, time dilation and unit scale. |
+| **Law** | The constitution translated into four human-readable standards: communication, economy, identity, reality baseline. |
+| **Reality Baseline (R1–R5)** | Five criteria for whether a virtual world counts as real: genesis-locked · globally consistent · causally closed · published-is-enforced · fully declared. |
+| **Structural reality** | Real doesn't mean "the numbers match Earth" — it means the rules cannot be quietly edited from behind. |
+| **Genesis lock** | The rules are written the moment the world is born; after that nobody can edit them. |
+| **Genesis proof** | An identity birth proof generated locally on the device — the private key never leaves it. |
+| **Soul hash** | The unique identity fingerprint derived from the genesis proof: one soul, one hash. |
+| **Ledger** | An append-only, hash-chained record; change one entry and the whole chain stops matching. |
+| **Referendum consensus (≥2/3)** | To change the rules, more than two thirds of the votes must agree. |
+| **Tick loop** | Each tick advances the world by one beat, and every agent takes one step. |
+| **Need-driven agent** | Agents decide what to do from a five-level need hierarchy instead of being pulled along by a script. |
+| **Memory sealing (HMAC)** | Memories are sealed with HMAC, so they can be neither tampered with nor taken away. |
+| **Second Perspective auditor** | A neutral third-party inspector that can run a 19-dimension compliance check on any world at any time. |
+| **Account system (L0–L4)** | Five account layers: identity root → credentials → session → authorization → recovery. |
+| **Social recovery (3/5)** | Lose your key and 3 of 5 guardians can restore it, with a 7-day revocable cooling-off period. |
+| **ShardRouter / spatial sharding** | The world is split by soul hash and deployed close to wherever each shard is needed. |
+| **HLC (Hybrid Logical Clock)** | Keeps event ordering consistent even across different data centres. |
+| **AOI delta sync** | Only changes inside what you can actually see are synchronized, saving bandwidth. |
+| **Partition guard** | When the network drops, the local side holds on; when it recovers, a Merkle diff tree merges the divergence back. |
+| **Compatibility bridge** | The customs desk for legacy worlds entering Nohn territory: semantic cleanup · physical-constant verification · identity check. |
+| **Roaming certificate** | A pass issued by the source world; the target world admits you only after verifying its signature. |
+| **Onboarding gate** | Worlds that don't satisfy reality baseline R1–R5 are not admitted. |
+
+---
+
 <div align="center">
 
 [← 返回 README](./README.md) &nbsp;·&nbsp; [中文说明](./README-zh.md)
