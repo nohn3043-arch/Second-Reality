@@ -7,8 +7,8 @@
 #   - AuditConfigLoader      审计配置加载（dict / json）
 #   - AuditPlugin            单条审计插件
 #   - CognitiveAuditEngine   审计调度引擎 + reconstruct() 因果重构算子
-#   - AuditReport            19 项审计结论容器
-#   - SecondPerspectiveAuditor  宪法级 19 项合规审计器（插件化）
+#   - AuditReport            审计结论容器（维度数由 FIELDS 决定）
+#   - SecondPerspectiveAuditor  宪法级合规审计器（插件化，维度数由 FIELDS 决定）
 #
 # 依赖方向：audit_engine -> constitution_rules（NOHN_LAW_AXIOMS/_safe_get）
 # 逆向依赖不存在，保证裁判中立性。
@@ -20,8 +20,34 @@ import base64
 from dataclasses import dataclass, asdict
 from typing import Dict, Any, List, Callable, Optional
 
-from constitution_rules import NOHN_LAW_AXIOMS, _safe_get
+from constitution_rules import NOHN_LAW_AXIOMS, CONSENSUS_THRESHOLD, _safe_get
 from system.keys import derive_soul_hash_from_pubkey
+
+# ----------------------------------------------------------------------------
+# 二阶因果内核（共存式覆盖 · 第负一章原始框架的"真因果"算力）
+# ----------------------------------------------------------------------------
+# second-perspective 的 NOMOS 引擎（Second Perspective Engine 1.0）作为本仓库
+# 审计层的"二阶因果维度"接入，**不替换**既有的 24 维合规审计：
+#   - 合规审计（FIELDS 中除 causal_second_perspective 外的维度）继续由本方负责；
+#   - causal_second_perspective 把运行态世界翻译成 NOMOS 决策上下文，调用引擎
+#     做十算子因果审计，其自带 meta_ledger 天然覆盖 混沌/无极/虚幻/天道/轮回
+#     —— 正好对应第负一章原框架，由真正的因果内核来计算。
+# 引擎为单文件、零外部依赖（仅标准库），已原样 vendor 到
+# system/second_perspective_engine.py；本处只做可选导入，缺失即降级为 WARN，
+# 不拖垮整个审计层（fail-soft）。
+try:
+    from system.second_perspective_engine import (
+        SecondPerspectiveEngine as _SPE_ENGINE,
+        ResponsibilityAccount as _SPE_ACCOUNT,
+        ConvergenceChecker as _SPE_CHECKER,
+    )
+    _SPE_AVAILABLE = True
+    _SPE_BLOCKING = getattr(_SPE_CHECKER, "BLOCKING_STATUSES", {"BLOCKED", "CRITICAL"})
+except Exception as _SPE_IMPORT_ERR:  # pragma: no cover - 引擎为可选二层
+    _SPE_ENGINE = _SPE_ACCOUNT = _SPE_CHECKER = None
+    _SPE_AVAILABLE = False
+    _SPE_BLOCKING = {"BLOCKED", "CRITICAL"}
+    _SPE_IMPORT_ERR = _SPE_IMPORT_ERR
 
 
 @dataclass
@@ -128,7 +154,7 @@ class CognitiveAuditEngine:
 
 
 # ============================================================
-# 19 项宪法合规审计（底座特有，随引擎驻留审计层）
+# 宪法合规审计（底座特有，随引擎驻留审计层；维度清单见 AuditReport.FIELDS）
 # ============================================================
 
 class AuditReport:
@@ -153,6 +179,14 @@ class AuditReport:
         ("communication_compliance", "Communication Law (law·通信协议)"),
         ("physics_compliance", "Physics Law (law·物理基准)"),
         ("auth_security", "Auth Security (账户系统·鉴权安全)"),
+        # ---- 第负一章 · 原始框架（Primordial Frames）----
+        ("genesis_commitment", "Chaos & R4 Executed (混沌·创世承诺真实锚定)"),
+        ("branch_space", "Wuji Branch Space (无极·分支空间可重建)"),
+        ("representation_isolation", "Illusion Isolation (虚幻·表征层硬隔离)"),
+        ("fairness_invariant", "Heavenly Way (天道·公平形式不可变)"),
+        ("conservation_law", "Samsara Conservation (轮回·守恒律)"),
+        # 二阶因果内核（共存式覆盖）：NOMOS 引擎对运行态世界做十算子因果审计
+        ("causal_second_perspective", "Second-Perspective Causal (二阶因果·NOMOS内核)"),
     ]
 
     def __init__(self):
@@ -174,7 +208,7 @@ class AuditReport:
         return bool(v)
 
     def summary(self) -> str:
-        lines = ["=== Nohn 第二视角审计（19 项维度）==="]
+        lines = [f"=== Nohn 第二视角审计（{len(self.FIELDS)} 项维度）==="]
         failed = []
         for attr, label in self.FIELDS:
             v = getattr(self, attr)
@@ -225,7 +259,7 @@ class SecondPerspectiveAuditor:
         self._register_plugins()
 
     def _register_plugins(self):
-        """注册 19 项审计插件（命名与 AuditReport 字段一一对应）"""
+        """注册全部审计插件（命名与 AuditReport.FIELDS 字段一一对应）"""
         e = self.engine
         e.register_plugin(AuditPlugin("spatial_defined", lambda w: self._audit_spatial_substrate(w)))
         e.register_plugin(AuditPlugin("temporal_defined", lambda w: self._audit_temporal_substrate(w)))
@@ -246,6 +280,21 @@ class SecondPerspectiveAuditor:
         e.register_plugin(AuditPlugin("communication_compliance", lambda w: self._audit_communication_law(w)))
         e.register_plugin(AuditPlugin("physics_compliance", lambda w: self._audit_physics_law(w)))
         e.register_plugin(AuditPlugin("auth_security", lambda w: self._audit_auth_security(w)))
+        # 第负一章 · 原始框架（Consumers；Producer 在 constitution_rules + system/）
+        e.register_plugin(AuditPlugin("genesis_commitment",
+                                      lambda w: self._audit_genesis_commitment(w)))
+        e.register_plugin(AuditPlugin("branch_space",
+                                      lambda w: self._audit_branch_space(w)))
+        e.register_plugin(AuditPlugin("representation_isolation",
+                                      lambda w: self._audit_representation_isolation(w)))
+        e.register_plugin(AuditPlugin("fairness_invariant",
+                                      lambda w: self._audit_fairness_invariant(w)))
+        e.register_plugin(AuditPlugin("conservation_law",
+                                      lambda w: self._audit_conservation_law(w)))
+        # 二阶因果内核（共存式覆盖）：本维度把 World 交给 NOMOS 引擎，
+        # 其余 24 维合规审计仍由本文件负责，互不影响。
+        e.register_plugin(AuditPlugin("causal_second_perspective",
+                                      lambda w: self._audit_causal_second_perspective(w)))
 
     def audit_world(self, world_instance) -> AuditReport:
         report = AuditReport()
@@ -907,6 +956,340 @@ class SecondPerspectiveAuditor:
             result["verdict"] = "FAILED - 鉴权安全架构不完整"
         return result
 
+    # ================================================================
+    # 第负一层审计方法：原始框架（对应 PRIMORDIAL_FRAMES 的可执行五条）
+    # ----------------------------------------------------------------
+    # 时间已有 temporal_defined 覆盖；其余五条在此消费 system/ 的生产者。
+    # 所有方法一律只读 world_instance，不写任何真实状态。
+    # ================================================================
+
+    def _audit_genesis_commitment(self, world_instance) -> Dict:
+        """混沌 + R4「公示即执行」：创世承诺是否真的被生产与锚定。
+
+        本维度是 R4 空转的回归探针。此前 R4 只在宪法层有算子、在巡检里被
+        当作纯函数调用，实现层既无生产者也无人消费——手写字面量
+        "sha256:abc" 也能通过。本维度只认三个可观测事实，不做声明式放行：
+
+        1. producer_present      —— 世界对象是否真的持有 commit 结果
+        2. published_equals_ledger —— 公示值与账本锚定值是否相等且非空
+        3. recompute_matches_ledger —— 用 commitment(seed) 重算是否命中账本区块
+        """
+        result = {
+            "producer_present": False,
+            "published_equals_ledger": False,
+            "recompute_matches_ledger": False,
+            "verdict": "PENDING",
+        }
+        phys = getattr(world_instance, "physics", None)
+        if not isinstance(phys, dict):
+            result["verdict"] = "FAILED - 无物理基准，混沌无承载"
+            return result
+        published = phys.get("published_commitment")
+        anchored = phys.get("ledger_commitment")
+        result["producer_present"] = bool(published and anchored)
+        result["published_equals_ledger"] = bool(
+            published is not None and anchored is not None and published == anchored
+        )
+        # 第三方复算：契约上只需 commitment(seed)，不读任何进程内可变状态
+        rule_impl = getattr(world_instance, "immutable_rule", None)
+        seed = phys.get("genesis_seed")
+        recomputed = None
+        if rule_impl is not None and hasattr(rule_impl, "commitment"):
+            recomputed = rule_impl.commitment(seed=seed)
+        ledger_anchor = None
+        history = getattr(world_instance, "history", None)
+        for _ts, event, _block_hash in getattr(history, "chain", []) or []:
+            if isinstance(event, dict) and event.get("event") == "genesis_commitment":
+                ledger_anchor = event.get("physics_commitment")
+        result["recompute_matches_ledger"] = bool(
+            recomputed is not None and ledger_anchor is not None
+            and recomputed == ledger_anchor
+        )
+        required = ["producer_present", "published_equals_ledger",
+                    "recompute_matches_ledger"]
+        if all(result[k] for k in required):
+            result["verdict"] = "PASS - 创世承诺已真实公示并锚定，第三方可独立复算"
+        else:
+            missing = [k for k in required if not result[k]]
+            result["verdict"] = f"FAILED - R4 未执行：{', '.join(missing)}"
+        return result
+
+    def _audit_branch_space(self, world_instance) -> Dict:
+        """无极：分支空间是否可从账本独立重建。
+
+        只读 history 中 event == 'world_fork' 的区块，不信任进程内 fork_registry——
+        进程内状态可被伪造，账本区块不可（改一块则全链失配）。
+        """
+        result = {
+            "tree_rebuildable": False,
+            "chain_valid": False,
+            "verdict": "PENDING",
+        }
+        branch = getattr(world_instance, "branch_space", None)
+        if not callable(branch):
+            result["verdict"] = "FAILED - 无分支空间生产者（无极未接入 system/）"
+            return result
+        space = branch()
+        if isinstance(space, dict) and space.get("root") \
+                and isinstance(space.get("nodes"), dict):
+            result["tree_rebuildable"] = True
+        if isinstance(space, dict) and space.get("chain_valid"):
+            result["chain_valid"] = True
+        if result["tree_rebuildable"] and result["chain_valid"]:
+            result["verdict"] = "PASS - 分支树可从账本独立重建，哈希链完整"
+        else:
+            result["verdict"] = "FAILED - 分支空间不可重建或账本链断裂"
+        return result
+
+    def _audit_representation_isolation(self, world_instance) -> Dict:
+        """虚幻：表征层是否被硬隔离在执行层之外（本条是虚幻的否决器）。
+
+        R4「公示即执行」意味着不存在一张可与执行层不一致的公示层。
+        因此虚幻只允许存在于表征层。本维度检查三项只读事实：
+          1. keys_disjoint        —— 表征层与 physics_constants 的键集合无交集
+          2. no_shared_reference  —— 执行层未直接引用表征层对象（否则一次原地写入即穿透）
+          3. commitment_anchored  —— 承诺仍在且两侧相等（表征未污染承诺输入）
+        """
+        result = {
+            "keys_disjoint": False,
+            "no_shared_reference": False,
+            "commitment_anchored": False,
+            "verdict": "PENDING",
+        }
+        reps = getattr(world_instance, "representations", None)
+        phys = getattr(world_instance, "physics", None)
+        if not isinstance(reps, dict) or not isinstance(phys, dict):
+            result["verdict"] = "FAILED - 表征层或执行层缺失，虚幻无边界"
+            return result
+        result["keys_disjoint"] = not (set(reps.keys()) & set(phys.keys()))
+        result["no_shared_reference"] = not any(v is reps for v in phys.values())
+        published = phys.get("published_commitment")
+        result["commitment_anchored"] = bool(
+            published and published == phys.get("ledger_commitment")
+        )
+        required = ["keys_disjoint", "no_shared_reference", "commitment_anchored"]
+        if all(result[k] for k in required):
+            result["verdict"] = "PASS - 表征层与执行层严格隔离，虚幻未污染承诺输入"
+        else:
+            missing = [k for k in required if not result[k]]
+            result["verdict"] = f"FAILED - 表征层污染执行层：{', '.join(missing)}"
+        return result
+
+    def _audit_fairness_invariant(self, world_instance) -> Dict:
+        """天道：公平的**形式条件**是否仍然不可变。
+
+        只检查形式条件，不检查任何数值阈值——阈值仍须由 ≥2/3 公投决定；
+        若把阈值一并冻结，就与宪法第一条 propose_amendment 直接矛盾。
+        形式条件三条：
+          1. uniform_threshold         —— 阈值仍来自单一权威源且等于 2/3
+          2. no_single_entity_override —— 无超级用户通道（三处硬编码禁止仍生效）
+          3. dynamic_balance_present   —— 经济侧存在可复算的动态平衡机制
+        """
+        result = {
+            "uniform_threshold": False,
+            "no_single_entity_override": False,
+            "dynamic_balance_present": False,
+            "verdict": "PENDING",
+        }
+        result["uniform_threshold"] = abs(
+            float(CONSENSUS_THRESHOLD) - 2.0 / 3.0
+        ) < 1e-12
+        # 无单方裁决：读取世界的永续层与灵魂确权层；缺省用宪法层纯函数兜底。
+        # 注意：DecentralizationGovernance 只含列表属性，无存储副作用，可安全实例化。
+        probes = []
+        perpetuity = getattr(world_instance, "world_perpetuity", None)
+        if perpetuity is not None and hasattr(perpetuity, "is_shutdown_legal"):
+            probes.append(perpetuity.is_shutdown_legal("any-world", "single-actor") is False)
+        attestation = getattr(world_instance, "soul_attestation", None)
+        if attestation is not None and hasattr(attestation, "revoke_soul"):
+            probes.append(attestation.revoke_soul("0" * 64) is False)
+        from constitution_rules import DecentralizationGovernance
+        _dg = DecentralizationGovernance()
+        probes.append(_dg.shutdown_world("any-world", "single-actor") is False)
+        probes.append(_dg.freeze_soul("0" * 64, "single-actor") is False)
+        result["no_single_entity_override"] = bool(probes) and all(probes)
+        economy = getattr(world_instance, "economy", None)
+        if economy is not None and hasattr(economy, "compliant"):
+            result["dynamic_balance_present"] = bool(economy.compliant())
+        required = ["uniform_threshold", "no_single_entity_override",
+                    "dynamic_balance_present"]
+        if all(result[k] for k in required):
+            result["verdict"] = "PASS - 公平形式条件不可变；阈值仍归公投"
+        else:
+            missing = [k for k in required if not result[k]]
+            result["verdict"] = f"FAILED - 公平形式条件被破坏：{', '.join(missing)}"
+        return result
+
+    def _audit_conservation_law(self, world_instance) -> Dict:
+        """轮回：守恒律是否成立（能量动态守恒 + 每个因指向下一个果）。
+
+        两条同时成立才算通过：
+          1. conservation_holds       —— Σ max(0, supply − reserve) ≤ 容差（无凭空创造）
+          2. chain_links_every_cause  —— history.validate_chain() 为真（每块链接前块）
+
+        注意：本维度**不**要求因果图成环。成环会使
+        CausalClosure.trace_chain(depth=-1) 不终止（已记入第负一章边界条款），
+        故轮回只实现为「守恒律 + 链式因果闭合」。
+        """
+        result = {
+            "conservation_holds": False,
+            "chain_links_every_cause": False,
+            "residual": None,
+            "verdict": "PENDING",
+        }
+        economy = getattr(world_instance, "economy", None)
+        if economy is not None and hasattr(economy, "conservation_holds"):
+            result["conservation_holds"] = bool(economy.conservation_holds())
+            result["residual"] = economy.conservation_residual()
+        history = getattr(world_instance, "history", None)
+        if history is not None and hasattr(history, "validate_chain"):
+            result["chain_links_every_cause"] = bool(history.validate_chain())
+        required = ["conservation_holds", "chain_links_every_cause"]
+        if all(result[k] for k in required):
+            result["verdict"] = "PASS - 守恒式成立且因果链逐块闭合"
+        else:
+            missing = [k for k in required if not result[k]]
+            result["verdict"] = f"FAILED - 轮回断裂：{', '.join(missing)}"
+        return result
+
+    # ================================================================\n    # 二阶因果内核（共存式覆盖 · 第负一章原始框架的"真因果"算力）\n    # ----------------------------------------------------------------\n    # 不替换既有合规审计：把运行态世界翻译成 NOMOS 决策上下文，交给\n    # Second Perspective Engine 1.0 跑十算子因果审计。引擎自带 meta_ledger，\n    # 其五条元基（混沌/无极/虚幻/天道/轮回）与本仓库第负一章原框架同名同义——\n    # 这一维度让那五条由真正的因果内核复算，而非仅停留在文档与守恒式上。\n    # 只读 world_instance，不写任何真实状态；引擎调用为纯函数式。\n    # ================================================================
+
+    def _audit_causal_second_perspective(self, world_instance) -> Dict:
+        result: Dict[str, Any] = {
+            "spe_available": _SPE_AVAILABLE,
+            "engine": "Second Perspective Engine 1.0",
+            "origin_hash": None,
+            "graph_hash": None,
+            "state_verdict": None,
+            "meta_ledger": {},
+            "has_blocking": False,
+            "verdict": "PENDING",
+        }
+        if not _SPE_AVAILABLE:
+            result["verdict"] = (
+                "WARN - NOMOS 引擎未装载（system/second_perspective_engine.py 缺失），"
+                "二阶因果维度跳过"
+            )
+            return result
+
+        # ---- 翻译 World -> NOMOS decision_context ----
+        phys = getattr(world_instance, "physics", None) or {}
+        immutable = getattr(world_instance, "immutable_rule", None)
+        history = getattr(world_instance, "history", None)
+        economy = getattr(world_instance, "economy", None)
+        world_id = getattr(world_instance, "world_id", "unknown-world")
+
+        assumptions = []
+        if immutable is not None:
+            assumptions = list((getattr(immutable, "physics_constants", {}) or {}).keys())
+        dependencies: Dict[str, Any] = {}
+        if immutable is not None:
+            cg = getattr(immutable, "causal_graph", None)
+            if isinstance(cg, dict):
+                dependencies = {str(k): [str(x) for x in v] for k, v in cg.items()}
+
+        branches: List[Dict] = []
+        branch_space = getattr(world_instance, "branch_space", None)
+        if callable(branch_space):
+            try:
+                space = branch_space()
+                children = (space.get("children", {}) or {})
+                for parent, kids in children.items():
+                    for kid in kids:
+                        branches.append({
+                            "assumption": str(kid),
+                            "delta_d": f"fork from {parent}",
+                        })
+            except Exception:
+                pass
+
+        evidence: List[str] = []
+        for key in ("published_commitment", "ledger_commitment", "genesis_seed"):
+            val = phys.get(key)
+            if val is not None:
+                evidence.append(f"{key}={val}")
+
+        # 资源约束：优先取经济总供给，缺省不猜（ORI 会标记为未声明，非阻断）
+        total_supply = 0.0
+        if economy is not None:
+            ts = getattr(economy, "total_supply", None)
+            try:
+                if callable(ts):
+                    total_supply = float(ts() or 0.0)
+                else:
+                    total_supply = float(ts or 0.0)
+            except Exception:
+                total_supply = 0.0
+        resources: Dict[str, Any] = {"supply": {"budget": total_supply, "committed": 0.0}}
+
+        ctx: Dict[str, Any] = {
+            "origin": f"genesis of {world_id}",
+            "goal": "运行态世界持续满足 R1–R5 真实约束与第负一章原始框架不变式",
+            "resources": resources,
+            "decision": f"对运行态世界 {world_id} 做二阶因果审计",
+            "assumptions": list(assumptions) or ["（无显式常数）"],
+            "outcome": "世界状态满足全部不变式（R1–R5 + 原始框架）",
+            "branches": branches,
+            "dependencies": dependencies,
+            "criteria": {"compliance": {"weight": 1.0}},
+            "evidence": evidence or ["（无承诺锚点）"],
+        }
+
+        # ---- 调用 NOMOS 引擎（每次审计新建实例，避免状态串扰）----
+        try:
+            account = _SPE_ACCOUNT(
+                organization="second-reality",
+                role="world-audit",
+                stage="WORLD_AUDIT",
+                owner="second-reality/second-perspective-auditor",
+            )
+            eng = _SPE_ENGINE(account)
+            eng.load_core_plugins()
+            # 决定性时钟：用创世时间戳保证同一世界可复现
+            ts_clock = None
+            chain = getattr(history, "chain", None) if history is not None else None
+            if chain:
+                try:
+                    ts_clock = float(chain[0][0])
+                except Exception:
+                    ts_clock = None
+            if ts_clock is not None:
+                eng.set_clock(ts_clock)
+            report = eng.audit(ctx)
+        except Exception as exc:
+            result["verdict"] = f"FAILED - NOMOS 引擎调用异常：{exc}"
+            return result
+
+        # ---- 把引擎结论收敛为维度判定 ----
+        analysis = report.get("analysis", {}) or {}
+        result["has_blocking"] = any(
+            isinstance(v, dict) and v.get("status") in _SPE_BLOCKING
+            for v in analysis.values()
+        )
+        result["origin_hash"] = (report.get("origin_anchor", {}) or {}).get("origin_hash")
+        result["graph_hash"] = (report.get("topology", {}) or {}).get("graph_hash")
+        state = (analysis.get("STATE", {}) or {}).get("verdict", {}) or {}
+        result["state_verdict"] = state.get("level")
+        meta = report.get("meta_ledger", {}) or {}
+        bases = meta.get("bases", {}) or {}
+        result["meta_ledger"] = {
+            name: (bases.get(name, {}) or {}).get("status")
+            for name in ("混沌", "无极", "虚幻", "天道", "轮回")
+        }
+        if not result["has_blocking"]:
+            result["verdict"] = (
+                "PASS - 二阶因果审计闭合（无阻断）；"
+                f"元基状态={result['meta_ledger']}"
+            )
+        else:
+            reasons = [
+                f"{k}:{v.get('status')}/{v.get('reason')}"
+                for k, v in analysis.items()
+                if isinstance(v, dict) and v.get("status") in _SPE_BLOCKING
+            ]
+            result["verdict"] = f"FAILED - NOMOS 内核判定阻断：{'；'.join(reasons)}"
+        return result
+
 
 # ============================================================
 # 使用示例：如何用这份蓝图"审计"一个虚拟世界
@@ -922,5 +1305,5 @@ if __name__ == "__main__":
     auditor = SecondPerspectiveAuditor()
     report = auditor.audit_world(FakeWorld())
 
-    # 输出审计结果（19 项维度，覆盖第零层 + 治理层 + law 层）
+    # 输出审计结果（覆盖第负一层原始框架 + 第零层 + 治理层 + law 层）
     print(report.summary())
