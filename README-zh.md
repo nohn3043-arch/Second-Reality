@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-[English](README.md) | 简体中文
+  <a href="README.md">English</a> | 简体中文
 </p>
 
 <div style="max-width: 1100px; margin: 0 auto; padding: 0 16px; font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; color: #2b2b2b; line-height: 1.8;">
