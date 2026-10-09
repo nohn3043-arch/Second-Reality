@@ -46,7 +46,7 @@ If a claim you care about cannot be observed from outside, record that as a find
 
 - **Programmatic** — `system.runtime.World` and `system.api.WorldAPI.dispatch`. The authoritative route set is `system/api.py` (see also README "API Service").
 - **Service level** — `python -m system.api` with **your** deployment profile (`STORAGE=sqlite/postgres/redis` per README). Our scripts use the in-memory backend; testing your target backend is the point of self-testing.
-- **Evidence level** — `world.audit_summary()` (19-dimension audit), and the hash-anchor format you can inspect via `expert_report.py` (see `reports/`). Produce your own anchors from your own run — never reuse ours.
+- **Evidence level** — `world.audit_summary()` (24-dimension audit), and the hash-anchor format you can inspect via `expert_report.py` (see `reports/`). Produce your own anchors from your own run — never reuse ours.
 
 ## 3. Test techniques worth trying
 

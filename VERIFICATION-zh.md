@@ -46,7 +46,7 @@
 
 - **程序级** —— `system.runtime.World` 与 `system.api.WorldAPI.dispatch`。路由集合的权威来源是 `system/api.py`（另见 README「API 服务」）。
 - **服务级** —— 用 `python -m system.api` 跑**你自己的**部署形态（按 README 通过 `STORAGE=sqlite/postgres/redis` 选择后端）。我们的脚本用的是内存后端；测试你的目标后端，才是自测的意义所在。
-- **证据级** —— `world.audit_summary()`（19 维审计），以及你可以通过 `expert_report.py` 查看的哈希锚点格式（见 `reports/`）。用你自己的运行生成你自己的锚点——永远不要复用我们的。
+- **证据级** —— `world.audit_summary()`（24 维审计），以及你可以通过 `expert_report.py` 查看的哈希锚点格式（见 `reports/`）。用你自己的运行生成你自己的锚点——永远不要复用我们的。
 
 ## 3. 值得一试的测试技法
 

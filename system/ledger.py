@@ -858,6 +858,38 @@ class EconomicReserve:
             return False
         return True
 
+    # ------------------------------------------------------------
+    # 第负一章 · 轮回：守恒律（账目侧单一权威实现）
+    # ------------------------------------------------------------
+
+    def conservation_residual(self) -> float:
+        """
+        守恒残差：Σ_assets max(0, total_supply − reserve_amount)。
+
+        含义：任何资产的流通量都不得超过其储备背书。残差为 0 表示
+        「没有任何资产被凭空创造」——即轮回（能量动态守恒）在账目上成立；
+        残差超过容差表示出现了无因之果（发行未记账 / 储备被抽走）。
+
+        容差取自 NOHN_LAW_AXIOMS：单一权威常量源纪律，本文件不重复硬编码。
+
+        可复算性：第三方只需读 reserve 表（asset_id / total_supply /
+        reserve_amount），无需信任本进程，重跑同一算式即可复现结论。
+        """
+        residual = 0.0
+        for asset in self._ledger.values():
+            gap = float(asset.get("total_supply", 0.0)) - float(
+                asset.get("reserve_amount", 0.0)
+            )
+            if gap > 0:
+                residual += gap
+        return residual
+
+    def conservation_holds(self) -> bool:
+        """守恒式判定：残差 ≤ NOHN_LAW_AXIOMS['conservation_tolerance']。"""
+        return self.conservation_residual() <= float(
+            NOHN_LAW_AXIOMS["conservation_tolerance"]
+        )
+
     def _sync_asset(self, asset_id: str) -> None:
         a = self._ledger[asset_id]
         self._storage.execute(

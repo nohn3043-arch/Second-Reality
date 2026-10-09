@@ -18,10 +18,12 @@
 #   virtual_world.py       = 演示运行时客户端
 # ============================================================
 
-# --- 规则层：宪法本体（构成公理 + 治理公理 + law 单一权威常量）---
+# --- 规则层：宪法本体（原始框架 + 构成公理 + 治理公理 + law 单一权威常量）---
 from constitution_rules import (
     NOHN_LAW_AXIOMS,
     _safe_get,
+    PRIMORDIAL_FRAMES,
+    primordial_completeness,
     SpatialSubstrate,
     TemporalSubstrate,
     CausalClosure,
@@ -63,6 +65,8 @@ from audit_engine import (
 __all__ = [
     "NOHN_LAW_AXIOMS",
     "_safe_get",
+    "PRIMORDIAL_FRAMES",
+    "primordial_completeness",
     "SpatialSubstrate",
     "TemporalSubstrate",
     "CausalClosure",
@@ -111,5 +115,6 @@ if __name__ == "__main__":
     auditor = SecondPerspectiveAuditor()
     report = auditor.audit_world(FakeWorld())
 
-    # 输出审计结果（18 项维度，覆盖第零层 + 治理层 + law 层）
+    # 输出审计结果（维度数由 AuditReport.FIELDS 派生；覆盖第负一层原始框架
+    # + 第零层构成公理 + 治理层 + law 层）
     print(report.summary())

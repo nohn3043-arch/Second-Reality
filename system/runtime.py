@@ -140,7 +140,7 @@ def _build_redis_session_store():
 
 
 class World:
-    """运行态世界：创世装配后的可审计实例，供 18 项审计消费。"""
+    """运行态世界：创世装配后的可审计实例，供第二视角审计消费。"""
 
     def __init__(
         self,
@@ -148,11 +148,23 @@ class World:
         data_dir: Optional[str] = None,
         initial_oracles: Optional[List[str]] = None,
         cluster: Optional[ClusterConfig] = None,
+        genesis_seed: Optional[int] = None,
     ):
         # cluster=None → 单机形态：不监听、不探测、不广播，行为与接线前一致
         self.cluster = cluster
         self.local_dc = cluster.local_dc if cluster is not None else "dc_local"
         self.world_id = world_id
+        # 第负一章 · 混沌：创世熵种子。
+        # 未显式注入时取 NOHN_LAW_AXIOMS 的确定性默认值——不得使用真随机，
+        # 否则同一创世参数在不同副本上得到不同初始分布，违反 R2 全域一致。
+        self.genesis_seed = (
+            int(genesis_seed) if genesis_seed is not None
+            else int(NOHN_LAW_AXIOMS["genesis_seed_default"])
+        )
+        # 第负一章 · 虚幻：表征层容器（信念 / 传闻 / 梦境）。
+        # 硬边界：本容器只承载「与现实不一致的表征」，永不进入执行层
+        # （physics_constants / 账本 / 共识 / 承诺哈希输入）。见 representation_isolation 审计。
+        self.representations: Dict[str, List[Dict]] = {}
         # 节点身份（确定性全序的 tie-break 键）+ HLC 全局时钟
         self.node_id = world_id
         self.hlc = HybridLogicalClock(node_id=self.node_id)
@@ -318,7 +330,9 @@ class World:
         self.causal_closure = CausalClosure()
         self.existence_axiom = ExistenceAxiom()
         self.genesis_condition = GenesisCondition()
-        self.immutable_rule = ImmutableWorldRule()
+        # 第负一章 · 无极：规则层必须与世界同源 id，否则分叉凭证的
+        # parent_world_id 会指向自动生成的名字，分支树根接不上世界本体。
+        self.immutable_rule = ImmutableWorldRule(world_id=self.world_id)
         self.immutable_rule.set_physics_constants({
             "gravity": NOHN_LAW_AXIOMS["gravity"],
             "time_dilation": NOHN_LAW_AXIOMS["time_dilation"],
@@ -370,6 +384,11 @@ class World:
         self.npcs: Dict[str, Agent] = {}
         self.main_quest = None  # 无主线（审计第四条）
         self.genesis_completed = False
+
+        # 第负一章 · 无极：先把分支登记簿对齐到既有账本，再创世。
+        # 必须在创世前完成，否则跨重启（持久账本）时分叉编号会与账本中
+        # 既有记录撞号——而「账本是唯一真相」正是无极成立的前提。
+        self._restore_fork_registry_from_ledger()
 
         self._bootstrap_genesis()
         # 地平线二接线：创世完成后再接集群——Intra-DC 快环需要已注册的共识节点
@@ -626,6 +645,42 @@ class World:
                 "timestamp": time.time(),
             }
         )
+        # ---- 第负一章 · 混沌 + R4「公示即执行」的真实生产者 ----
+        # 此前 commitment() 只在宪法层与巡检脚本里被当作纯函数调用：
+        # system/ 创世路径从未调用它，审计器不消费它，账本里也没有锚点，
+        # 于是 R4 成了一条「公示了但没执行」的条款（空转）。
+        # 此处把承诺哈希真正算出来、公示进 world_config、并锚进哈希链账本，
+        # 使第三方可用 commitment(seed) 独立重算并与账本锚点比对。
+        self.physics_commitment = self.immutable_rule.commitment(seed=self.genesis_seed)
+        genesis_commitment_block = self.history.append(
+            {
+                "event": "genesis_commitment",
+                "world_id": self.world_id,
+                "physics_commitment": self.physics_commitment,
+                "genesis_seed": self.genesis_seed,
+                "timestamp": time.time(),
+            }
+        )
+        # R4 两侧必须由同一次计算产生且相等：
+        #   published_commitment —— 公示给外部世界的值
+        #   ledger_commitment    —— 账本锚定的值
+        # 审计器只比对这两侧与「重算值」，不再接受任何手写字面量。
+        self.physics["published_commitment"] = self.physics_commitment
+        self.physics["ledger_commitment"] = self.physics_commitment
+        self.physics["genesis_seed"] = self.genesis_seed
+        # R1–R3 / R5 的真实状态：全部由可观测事实推导，不做无条件声明。
+        # R1 创世锁定 / R3 无外部注入 —— 常数锁已闭合，set_physics_constants 不再可写。
+        _locked = bool(getattr(self.immutable_rule, "_physics_locked", False))
+        _consts = self.immutable_rule.physics_constants
+        self.physics["genesis_locked"] = _locked
+        self.physics["no_exogenous_injection"] = _locked
+        # R2 全域一致 —— 执行层持有的常数与规则层的唯一权威常量逐项相同。
+        self.physics["constants_globally_consistent"] = all(
+            self.physics.get(k) == _consts.get(k)
+            for k in ("gravity", "time_dilation", "unit_scale")
+        )
+        # R5 反应表完备 —— 创世时要素反应表已非空声明。
+        self.physics["reaction_table_complete"] = bool(_consts.get("element_reactions"))
         # 创世灵魂（可为空，但必须显式声明）
         genesis_souls: List[str] = []
         genesis_config = {
@@ -635,6 +690,7 @@ class World:
             "existence_axiom": self.existence_axiom,
             "initial_consensus_nodes": list(self.consensus.nodes.keys()),
             "genesis_block": genesis_block,
+            "genesis_commitment_block": genesis_commitment_block,
             "genesis_souls": genesis_souls,
         }
         self.genesis_completed = self.genesis_condition.initiate_genesis(genesis_config)
@@ -896,9 +952,149 @@ class World:
         )
         return {"count": len(flat), "deterministic_order": ordered, "events": flat}
 
+    # ---- 第负一章 · 原始框架的可执行接口 ----
+    def represent(self, actor: str, content: Dict, truth: bool = False) -> Dict:
+        """
+        第负一章 · 虚幻：向表征层写入一条表征（信念 / 传闻 / 梦境）。
+
+        硬边界：本方法只写 self.representations，绝不触碰 physics_constants、
+        账本、共识或承诺哈希。truth 只作为表征内容被记录，不参与任何执行层
+        判定——真伪之别留在表征层内部，这正是「亦真亦假亦如梦」的机械含义。
+        """
+        if not isinstance(actor, str) or not actor:
+            return {}
+        entry = dict(content) if isinstance(content, dict) else {"content": content}
+        entry["truth"] = bool(truth)
+        entry["tick"] = self.temporal_substrate.global_clock
+        with self._lock:
+            self.representations.setdefault(actor, []).append(entry)
+        return entry
+
+    def beliefs_of(self, actor: str) -> List[Dict]:
+        """读取某主体的全部表征（信念 / 传闻 / 梦境）。"""
+        return list(self.representations.get(actor, []))
+
+    def _restore_fork_registry_from_ledger(self) -> None:
+        """
+        第负一章 · 无极：把分支登记簿对齐到账本（以账本为唯一真相）。
+
+        为什么必须做：宪法层 `_fork_world` 的 child_id 由
+        `len(self.fork_registry) + 1` 推导，而 `fork_registry` 原本只是
+        进程内列表。持久账本下重启一次，登记簿归零、编号回到 001，
+        便与账本中既有分叉记录撞号——同一分支空间里出现两个同名子世界，
+        分支树随即自相矛盾。
+
+        因此这里在创世前回填：账本里属于本世界的 `world_fork` 区块
+        逐条还原进登记簿，使编号序列跨进程、跨重启仍然唯一且只增。
+        回填只补计数与凭证指针，不重算常数、不触碰父世界状态。
+        """
+        restored = 0
+        for _ts, event, _block_hash in self.history.chain:
+            if not isinstance(event, dict) or event.get("event") != "world_fork":
+                continue
+            if event.get("world_id") != self.world_id:
+                continue  # 共享账本中可能存在其他世界的分叉，不计入本世界序列
+            self.immutable_rule.fork_registry.append({
+                "fork_id": event.get("fork_id"),
+                "parent_world_id": event.get("parent_world_id"),
+                "parent_commitment": event.get("parent_commitment"),
+                "child_commitment": event.get("child_commitment"),
+                "parent_untouched": event.get("parent_untouched"),
+                "requires_migration": True,
+                "ballot": None,
+                "status": "forked",
+                "restored_from_ledger": True,
+            })
+            restored += 1
+        if restored:
+            logger.info(
+                "fork registry restored from ledger world_id=%s forks=%d",
+                self.world_id, restored,
+            )
+
+    def fork_world(
+        self,
+        change: Dict,
+        proposer: str,
+        ballot: Optional[Dict] = None,
+    ) -> Dict:
+        """
+        第负一章 · 无极：分叉出一个新世界，并把分叉凭证锚进哈希链账本。
+
+        与 ImmutableWorldRule._fork_world 的分工（宪法层注释已声明）：
+        宪法层只产出凭证、不承载世界对象本体；世界注册由 system/ 层负责。
+        本方法即那个 system/ 层——凭证追加进 history 之后，branch_space()
+        可从账本独立重建分支树，第三方无需信任本进程的内存状态。
+
+        fail-closed：公投未达 ≥2/3 时不产生凭证，也不写入账本。
+        父世界的常数在本方法内不被触碰（R1：分叉是复制，不是升级）。
+        """
+        before = len(self.immutable_rule.fork_registry)
+        approved = self.immutable_rule.propose_amendment(change, proposer, ballot)
+        if not approved or len(self.immutable_rule.fork_registry) <= before:
+            return {"status": "fork_rejected", "reason": "no fork record produced"}
+        record = self.immutable_rule.fork_registry[-1]
+        block_hash = self.history.append(
+            {
+                "event": "world_fork",
+                "world_id": self.world_id,
+                "fork_id": record.get("fork_id"),
+                "parent_world_id": record.get("parent_world_id"),
+                "parent_commitment": record.get("parent_commitment"),
+                "child_commitment": record.get("child_commitment"),
+                "parent_untouched": record.get("parent_untouched"),
+                "timestamp": time.time(),
+            }
+        )
+        return {"status": "forked", "block_hash": block_hash, "record": record}
+
+    def branch_space(self) -> Dict:
+        """
+        第负一章 · 无极：从账本独立重建分支空间（分支树）。
+
+        只读 history 中 event == 'world_fork' 的区块，不依赖任何进程内状态，
+        因此第三方可对同一账本重跑本方法并得到同一结果（可复算性）。
+        """
+        nodes: Dict[str, Dict] = {self.world_id: {"parent": None, "depth": 0}}
+        children: Dict[str, List[str]] = {}
+        forks = 0
+        for _ts, event, _block_hash in self.history.chain:
+            if not isinstance(event, dict) or event.get("event") != "world_fork":
+                continue
+            if event.get("world_id") != self.world_id:
+                continue  # 共享账本中其他世界的分叉不属于本分支空间
+            forks += 1
+            parent = event.get("parent_world_id")
+            child = event.get("fork_id")
+            if not parent or not child:
+                continue
+            if parent not in nodes:
+                nodes[parent] = {"parent": None, "depth": 0}
+            nodes[child] = {
+                "parent": parent,
+                "depth": nodes[parent]["depth"] + 1,
+                "parent_commitment": event.get("parent_commitment"),
+                "child_commitment": event.get("child_commitment"),
+            }
+            children.setdefault(parent, []).append(child)
+        return {
+            "root": self.world_id,
+            "nodes": nodes,
+            "children": children,
+            "fork_count": forks,
+            "chain_valid": self.history.validate_chain(),
+        }
+
+    def conservation_residual(self) -> float:
+        """
+        第负一章 · 轮回：守恒残差（委托给储备账本，单一权威实现）。
+        见 EconomicReserve.conservation_residual()。残差 ≤ 容差 即守恒式成立。
+        """
+        return self.economy.conservation_residual()
+
     # ---- 审计上报 ----
     def audit(self) -> AuditReport:
-        """运行 19 项第二视角审计，返回可打印结论。"""
+        """运行第二视角审计（维度数由 AuditReport.FIELDS 决定，不在此硬编码）。"""
         auditor = SecondPerspectiveAuditor()
         return auditor.audit_world(self)
 

@@ -27,7 +27,7 @@
 
 <ul>
   <li><strong>An end-to-end account &amp; world runtime</strong> — persistent hash-chained ledger, ≥2/3 referendum consensus, need-driven agents, headless tick loop, REST + WebSocket API, and a multi-layer account system (credentials → sessions → tiered authorization → social recovery) wired together for real.</li>
-  <li><strong>The Second Perspective Cognitive Auditor</strong> as the neutral referee — a 19-dimension compliance review (including a functionally executed authentication-security dimension) that can be run on demand against any world instance.</li>
+  <li><strong>The Second Perspective Cognitive Auditor</strong> as the neutral referee — a 24-dimension compliance review (including a functionally executed authentication-security dimension and five primordial-frame dimensions) that can be run on demand against any world instance.</li>
   <li><strong>Geo-distributed readiness</strong> — hybrid logical clocks, spatial sharding with handover, AOI delta sync, partition guard with Merkle diff-merge, and hierarchical (intra-DC fast ring + inter-DC epoch) consensus, all speaking over real TCP and verified by a 3-node local cluster smoke test.</li>
   <li><strong>AR / edge access</strong> — an Edge SDK for device-credential login, AOI viewport sync, and cross-DC relocation, plus roaming, account-abstraction and key-rotation modules.</li>
 </ul>
@@ -64,6 +64,7 @@ python tools/cluster_smoke.py   # 3-node local geo-distributed cluster — ~14s
 python tools/edge_smoke.py      # AR edge access path — <1s
 python tools/wiring_smoke.py    # account abstraction / key rotation / identity root / roaming — ~2s
 python tools/reality_smoke.py   # reality baseline R1–R5 / onboarding gate / referendum / fork — <1s
+python tools/frames_smoke.py    # primordial frames: R4 really executed · branch space · conservation — <1s
 ```
 
 ### Programmatic Launch (Reference World)
@@ -79,7 +80,7 @@ genesis_proof = build_genesis_proof(device["secret"], {"genesis_id": "my-first-s
 soul_hash = derive_soul_hash(genesis_proof)
 world.spawn_agent(soul_hash=soul_hash, genesis_proof=genesis_proof)
 world.tick()
-print(world.audit_summary())       # 19-dimension Second Perspective audit
+print(world.audit_summary())       # 24-dimension Second Perspective audit
 ```
 
 ### API Service
@@ -99,7 +100,7 @@ serve(world, host="0.0.0.0", port=8000)
 flowchart TB
     UP["🌍 World operator / legacy-world participants<br/>start genesis · submit events and legacy-world data"]
 
-    RULES["📜 constitution_rules.py · constitution.py · law/<br/>freeze the axioms, ten governance laws and the four law sets as a read-only trust root"]
+    RULES["📜 constitution_rules.py · constitution.py · law/<br/>freeze the axioms, the six primordial frames, ten governance laws and the four law sets as a read-only trust root"]
 
     BRIDGE["🛃 compatibility_bridge.py<br/>legacy-world customs: semantic cleansing · physics-constant check · soul-hash check"]
 
@@ -166,9 +167,10 @@ flowchart TB
 
 The stack keeps rules (read-only), the auditor (neutral referee), the implementation, and the demo strictly separated:
 
-- <strong>Constitution Rules</strong> (`constitution_rules.py`): original axioms and ten governance laws, locked as the root trust anchor. `NOHN_LAW_AXIOMS` is the single authoritative source for shared constants (gravity, time dilation, unit scale, soul-hash length, oracle minimum sources).
+- <strong>Constitution Rules</strong> (`constitution_rules.py`): original axioms, <strong>the six primordial frames (Chapter &minus;1)</strong> and ten governance laws, locked as the root trust anchor. `NOHN_LAW_AXIOMS` is the single authoritative source for shared constants (gravity, time dilation, unit scale, soul-hash length, oracle minimum sources, genesis-seed length, conservation tolerance).
+- <strong>Primordial Frames</strong> (`constitution_rules.PRIMORDIAL_FRAMES`, Chapter &minus;1): six frames — <em>Time · Chaos · Wuji (Taiji) · Illusion · Heavenly Way · Samsara</em>. Admission is gated by the <strong>M1 discipline</strong>: a frame may enter the constitution only if it carries a <em>producer</em> in `system/`, a <em>consumer</em> in `audit_engine.py`, a <em>recompute</em> formula a third party can rerun, and a <em>boundary</em> clause. A frame with a concept but no execution point would be, by this repository's own R4 standard, an illusion — so `primordial_completeness()` audits the chapter against itself. Illusion therefore ships with a hard boundary (representation layer only, never the execution layer), and Samsara is implemented as a conservation law plus chain-linked causation — <em>never</em> as a cycle, because a cycle would make `CausalClosure.trace_chain(depth=-1)` non-terminating.
 - <strong>Audit Engine</strong> (`audit_engine.py`): Second Perspective Cognitive Auditor — `ResponsibilityAccount` + pluggable `AuditPlugin` + `CognitiveAuditEngine` (counterfactual `reconstruct()`) + `SecondPerspectiveAuditor`. Runs a 19-dimension compliance review; the authentication-security dimension functionally executes the account stack in an isolated in-memory world rather than probing attributes.
-- <strong>Law</strong> (`law/`): four human-readable standards — Communication Protocol · Unified Global Economy (currency, pegging, reserve proof, redemption) · Identity Attestation (soul-hash-bound, with the V2.2 credential-recovery clause) · <strong>Reality Baseline (V3.0)</strong>, built on the thesis that <em>a virtual world must be a real world</em>. Reality is treated as a <em>structural</em> property, not a numeric one: it is the invariance of the rules — genesis-locked, globally consistent, causally closed, published-as-executed, complete — not whether their values equal Earth's. A world with gravity 3.7&nbsp;m/s² is real if that value is locked at genesis and actually enforced; a world with gravity 9.80665 that an operator can edit from a back office is not. The criteria are R1–R5, and reality is enforced as an onboarding gate. Their machine-readable JSON-Schema counterparts live in `system/protocol.py` and drive onboarding validation.
+- <strong>Law</strong> (`law/`): five human-readable standards — Communication Protocol · Unified Global Economy (currency, pegging, reserve proof, redemption) · Identity Attestation (soul-hash-bound, with the V2.2 credential-recovery clause) · <strong>Reality Baseline (V3.0)</strong>, built on the thesis that <em>a virtual world must be a real world</em>. Reality is treated as a <em>structural</em> property, not a numeric one: it is the invariance of the rules — genesis-locked, globally consistent, causally closed, published-as-executed, complete — not whether their values equal Earth's. A world with gravity 3.7&nbsp;m/s² is real if that value is locked at genesis and actually enforced; a world with gravity 9.80665 that an operator can edit from a back office is not. The criteria are R1–R5, and reality is enforced as an onboarding gate. Their machine-readable JSON-Schema counterparts live in `system/protocol.py` and drive onboarding validation. The fifth standard, <em>Primordial Frames</em>, writes down the mechanical anchor and recompute formula of each frame above (see `law/Primordial frames standard`).
 - <strong>System</strong> (`system/`, 23 modules): the real implementation layer — ledger, consensus, agent engine, headless runtime, REST/WS API, protocol schema, account-system layers, geo-distributed subsystems, and edge access. See the module table below.
 - <strong>Bridge</strong> (`compatibility_bridge.py`): the customs checkpoint for legacy worlds entering Nohn territory — `translate_intent()` semantic cleansing, `check_physics_constants()` verification, `verify_soul_hash()` identity verification.
 
@@ -271,6 +273,7 @@ Workload is pure CPU logical simulation (need state machine + SHA-256 hash chain
 | `tools/edge_smoke.py` | Edge device: credential enrollment, challenge login, AOI viewport deltas, nearest-DC routing, cross-DC relocation, revocation | <1s |
 | `tools/wiring_smoke.py` | Account abstraction (session-key issue → challenge → execute → constraints → revoke), key rotation (retired verifies / revoked kills tokens), identity root (Shamir 3-of-5 recovery), soul roaming (issue → tamper rejection → verify → map) | ~2s |
 | `tools/reality_smoke.py` | Reality baseline R1–R5 (genesis lock / global consistency / causal closure / published-as-executed / reaction-table completeness), the `reality` onboarding gate, referendum fail-closed behaviour, and fork-only amendment (parent world left untouched, child world locked) — 40 checks | <1s |
+| `tools/frames_smoke.py` | Primordial frames (Chapter &minus;1): the chapter self-audit (M1 discipline), the entropy seed entering the commitment, R4 **really executed** plus a regression probe proving the old hand-written literal now fails, the branch space rebuilt from the ledger, representation-layer isolation, the fairness form invariant, and the conservation law — including detection of a deliberately broken ledger, and fork ids staying unique across a restart — 56 checks | <1s |
 
 **Designing your own tests?** See **[VERIFICATION.md](VERIFICATION.md)** — a claim inventory, test interfaces, and test-design techniques for independent teams.
 
@@ -325,7 +328,7 @@ Key endpoints: `GET /health`, `GET /world`, `POST /world/tick`, `GET /world/snap
 
 ```text
 Second-Reality/
-├── constitution_rules.py        # Constitution: axioms + ten governance laws + NOHN_LAW_AXIOMS
+├── constitution_rules.py        # Constitution: axioms + primordial frames (Ch. −1) + ten laws + NOHN_LAW_AXIOMS
 ├── audit_engine.py              # Second Perspective Auditor: 19-dimension compliance review
 ├── constitution.py              # Aggregation layer (backward-compatible re-exports)
 ├── compatibility_bridge.py      # Legacy world "customs": semantic / physics / soul verification
@@ -355,8 +358,8 @@ Second-Reality/
 │   ├── cluster.py               #   Cluster wiring + heartbeat + dispatcher
 │   ├── edge_sdk.py              #   AR / edge device access SDK
 │   └── soul_roaming.py          #   Cross-world roaming certificates + soul mapping (/roaming/*)
-├── law/                         # Communication / Economic / Identity / Physics standards (text)
-├── tools/                       # cluster_smoke / edge_smoke / doc generation utilities
+├── law/                         # Communication / Economic / Identity / Physics / Primordial frames standards (text)
+├── tools/                       # cluster_smoke / edge_smoke / frames_smoke / doc generation utilities
 ├── reports/                     # Exported expert review reports
 ├── assets/                      # banner.svg/png, overview.svg/png
 ├── .gitignore

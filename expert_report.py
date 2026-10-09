@@ -37,11 +37,13 @@ def export_world_expert_report(
     out_path: Optional[Path] = None,
     out_dir: Path = Path("reports"),
 ) -> Path:
-    """运行 19 项审计并在本地落一份专家复核 Markdown 报告。返回文件路径。"""
+    """运行全部审计维度并在本地落一份专家复核 Markdown 报告。返回文件路径。"""
     auditor = auditor or SecondPerspectiveAuditor()
     report = auditor.audit_world(world)
 
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # 维度总数一律从 FIELDS 派生，不硬编码——新增维度后本报告不会失真。
+    total_dims = len(report.FIELDS)
     dims = [
         (attr, label)
         for attr, label in report.FIELDS
@@ -66,12 +68,15 @@ def export_world_expert_report(
     lines.append("")
     lines.append("## 1. 结论摘要")
     lines.append("")
-    lines.append(f"- 审计维度：{len(dims)}/19 已执行，**{len(passed)} 通过 / {len(failed)} 未通过**")
+    lines.append(
+        f"- 审计维度：{len(dims)}/{total_dims} 已执行，"
+        f"**{len(passed)} 通过 / {len(failed)} 未通过**"
+    )
     lines.append(f"- 世界历史链完整性校验：`{chain_valid}`")
     lines.append(f"- 灵魂注册数：`{soul_count}`")
     lines.append(f"- 锚定资产数：`{asset_count}`，预言机来源：`{oracle_count}`")
     lines.append("")
-    lines.append("## 2. 19 项审计判定")
+    lines.append(f"## 2. {total_dims} 项审计判定")
     lines.append("")
     lines.append("| 维度 | 判定 |")
     lines.append("|---|---|")
@@ -112,7 +117,7 @@ def export_world_expert_report(
     lines.append("## 5. 边界声明")
     lines.append("")
     lines.append("- 本报告为本地展示层文件，**不构成签名审计记录**，不能单独作为合规证据。")
-    lines.append("- 19 项审计是结构性合规校验，**不证明世界运行内容正确**；业务正确性由运营方负责。")
+    lines.append("- 全部审计维度都是结构性合规校验，**不证明世界运行内容正确**；业务正确性由运营方负责。")
     lines.append("- 哈希锚点只能证明账本未被篡改，**不能证明审计判定本身无误**；判定逻辑请审阅 audit_engine.py。")
     lines.append("")
 

@@ -1,0 +1,176 @@
+# Nohn 虚拟世界法律层 — 原始框架规范 (Law Layer: Primordial Frames Standard) V1.0
+# law 层第五份标准，经宪法第负一章（原始框架）授权。
+# 主题：一个世界在拥有空间 / 时间 / 因果 / 存在 / 创世之前，它的前提是什么。
+
+# ============================================================
+# 【为何需要这份标准】
+# ------------------------------------------------------------
+# 宪法第零章（世界构成公理）回答了「世界由什么构成」，但它默认了若干更前置
+# 的前提——时间为何不可逆、初始无序从何而来、未来分支容纳在哪里、虚假与
+# 真实如何共存、公平何以一视同仁、能量为何守恒。第负一章把这六条前提命名
+# 为「原始框架」，本规范把它们从概念落成可验证的机械锚点。
+#
+# 本规范的立法动机来自一处既有缺陷：宪法层的 R4 算子 commitment() 曾长期
+# 只被当作纯函数调用——system/ 创世路径从未调用它，审计器不消费它，账本里
+# 也没有锚点。也就是说，R4「公示即执行」曾是一条「公示了但没执行」的条款。
+# 按本仓库自身的定义，那就是虚幻。因此本规范确立 M1 入章纪律：
+# 只写概念、没有执行点的「框架」，就是把虚幻制度化，比不加更坏。
+# ============================================================
+
+## 0. 入章纪律 (Admission Discipline, M1 — 强制)
+
+一条原始框架要进入宪法第负一章，必须同时给出四要素，缺一则不得入章，
+只能留在文档层：
+
+| 要素 | 含义 | 落点 |
+|---|---|---|
+| **statement** | 概念陈述，非工程角色也能读懂 | 本文件 + GLOSSARY |
+| **producer** | 在世界内部生产该不变式的执行点 | `system/` 中的具体模块与方法 |
+| **consumer** | 消费并判定该不变式的审计维度 | `audit_engine.AuditReport.FIELDS` |
+| **recompute** | 第三方可独立重跑的算式 | 只用账本 / 公开输入，不依赖进程内存 |
+
+**边界条款（boundary）** 与上述四要素并列强制：每条框架必须声明它
+**不得触碰什么**。没有边界的原始框架会被误用为万能解释权，而解释权是
+中心化控制的另一种形态，与治理公理十（反中心化）直接冲突。
+
+自查形式：`constitution_rules.primordial_completeness()`。
+该函数逐条检查四要素是否齐备，任一缺失即判该框架不可入章。
+
+## 1. 权威源纪律 (Single Authoritative Source, M2 — 强制)
+
+原始框架涉及的一切数值常数一律取自 `constitution_rules.NOHN_LAW_AXIOMS`。
+`system/` 层、`audit_engine` 层、本文件均不得重复硬编码。
+现有受此约束的原始框架常数：
+
+- `genesis_seed_bytes` —— 创世熵种子字节长度
+- `genesis_seed_default` —— 未显式注入创世种子时的确定性默认值
+- `conservation_tolerance` —— 守恒残差容差
+
+理由与物理常数一致：一旦同一数值在两处独立存在，两处就会分岔，
+而分岔的公示层与执行层正是 R4 判定「不真实」的情形。
+
+## 2. 六条原始框架 (The Six Frames)
+
+### 2.1 时间 (Time)
+- **陈述**：时间就是时间——世界得以流动的前提，绝对的第一真理；不可逆，
+  不可对抗，亦不可触碰。
+- **生产者**：`TemporalSubstrate.define_temporal_properties`
+  （创世锁 `_temporal_locked`，`direction` 仅允许 `'forward'`）
+  + `system/runtime.py` 创世装配。
+- **消费者**：`audit_engine.temporal_defined`。
+- **复算式**：`direction == 'forward'` 且 `is_retrocausality_permitted() is False`。
+- **边界**：不接受任何回溯或时间线覆写。已锁定的时间属性只能经
+  `propose_amendment` 分叉新世界，不得在原世界打补丁。
+- **备注**：本条是本规范中唯一「机械锚点在该章成文之前即已存在」的框架，
+  因此它零新增代码，仅被本章登记与引用。
+
+### 2.2 混沌 (Chaos)
+- **陈述**：混沌是原初宇宙的起点，万事万物的能量本根，如分子般无规则地涌动。
+- **生产者**：`World.__init__(genesis_seed)` → `ImmutableWorldRule.commitment(seed)`；
+  创世时把承诺哈希锚进哈希链账本。
+- **消费者**：`audit_engine.genesis_commitment`。
+- **复算式**：`sha256(canonical(physics_constants) + '|seed:{seed}')`
+  等于账本 `genesis_commitment` 区块中的锚点，且公示值 == 账本锚定值。
+- **边界**：**混沌必须是可复算的确定性熵种子，不得使用真随机**
+  （`os.urandom` / `secrets`）。真随机会让同一创世参数在不同副本上产生不同
+  初始分布，直接违反 R2 全域一致。
+- **记载的缺陷修正**：`commitment()` 曾无法处理创世时真实注入的元组键
+  `element_reactions`（如 `("fire", "water")`），一旦世界含要素反应表即抛
+  `TypeError`。现由 `_canonical_axiom_payload()` 归一化处理；对只含字符串键
+  与标量的最小常数集，归一结果与原实现一致，故既有哈希逐字节不变。
+
+### 2.3 无极 / 太极 (Wuji / Taiji)
+- **陈述**：无极即太极，是最初之始，亦是最终之终，更容纳着未来的无限分支。
+- **生产者**：`World.fork_world()` → 分叉凭证追加进 `HistoryLedger`。
+  世界注册由 `system/` 层负责（宪法层已声明该分工，`_fork_world` 只产出凭证）。
+- **消费者**：`audit_engine.branch_space`。
+- **复算式**：遍历 `history` 中 `event == 'world_fork'` 的区块，重建
+  `parent_world_id → [fork_id]` 分支树；根为创世世界，且
+  `history.validate_chain()` 必须为真。
+- **边界**：分支是复制出新世界，不是原地升级——父世界的 `physics_constants`
+  在分叉后不得被改写（R1）。迁移由居民自愿选择，不自动搬迁。
+- **可复算性要求**：分支树只允许由账本重建。任何以进程内 `fork_registry`
+  为唯一真相的实现都不满足本条——内存可伪造，账本区块不可（改一块则全链失配）。
+
+### 2.4 虚幻 (Illusion)
+- **陈述**：虚幻是现实的反面，与现实一体两面，为一切谎言与梦境提供基底
+  ——亦真亦假亦如梦。
+- **生产者**：`World.representations`（表征层容器：信念 / 传闻 / 梦境），
+  写入接口 `World.represent()`，读取接口 `World.beliefs_of()`。
+- **消费者**：`audit_engine.representation_isolation`。
+- **复算式**：`set(representations.keys()) ∩ set(physics_constants.keys()) == ∅`，
+  且表征层写入前后承诺哈希不变。
+- **边界（硬）**：**虚幻只能存在于表征层。一旦进入执行层**
+  （`physics_constants` / 账本 / 共识 / 承诺哈希的输入），
+  **即等于给「规则可被后台偷改」开后门**，直接打穿 R1 创世锁定、
+  R3 因果闭合、R4 公示即执行。
+- **立法说明**：本条是六条中唯一「先立边界、再允许存在」的框架。原因在于
+  R4「公示即执行」恰恰是虚幻的天敌——它宣示不存在一张可与执行层不一致的
+  公示层。因此虚幻的合法领域被限制为「不影响执行层哈希的内部表征」，
+  真伪之分留在表征层内部。
+
+### 2.5 天道 (Heavenly Way)
+- **陈述**：天道是公平本身——相对的公平，对万物一视同仁，维系世间的动态平衡。
+- **生产者**：`CONSENSUS_THRESHOLD`（单一权威阈值）
+  + `DecentralizationGovernance` 的硬编码禁止项（`shutdown_world` / `freeze_soul`）
+  + `WorldPerpetuity.is_shutdown_legal` + `SoulAttestation.revoke_soul`。
+- **消费者**：`audit_engine.fairness_invariant`。
+- **复算式**：`CONSENSUS_THRESHOLD == 2/3`，且上述四处禁止项仍恒返回 `False`。
+- **边界**：不可变的是公平的**形式条件**（一视同仁、不许单方裁决、
+  无超级用户通道）；**具体阈值**（投票率下限、财富上限等）仍由 ≥2/3 公投决定，
+  **不得随本条一并冻结**——否则与治理公理第一条 `propose_amendment` 直接矛盾。
+- **动态平衡**：由经济层的 PoR 储备覆盖与预言机独立信源下限承载，
+  审计维度复用 `EconomicReserve.compliant()`，不另立一套判定。
+
+### 2.6 轮回 (Samsara)
+- **陈述**：轮回在万事万物中无处不在，不止是能量的循环；能量动态守恒，
+  每一个因就是下一个果。
+- **生产者**：`EconomicReserve.conservation_residual()`（账目侧）
+  + `HistoryLedger` 哈希链（每块 `block_hash` 链接前块 `prev_hash`）。
+- **消费者**：`audit_engine.conservation_law`。
+- **复算式**：`residual = Σ_assets max(0, total_supply − reserve_amount)`，
+  须 ≤ `NOHN_LAW_AXIOMS['conservation_tolerance']`；
+  且 `history.validate_chain()` 为真（每个果都指向前一个因）。
+- **边界（硬）**：**轮回不得实现为因果图成环。**
+  `CausalClosure.trace_chain(depth=-1)` 在环内不会终止——
+  环内每个节点的 `causes` 永不为空，`while` 循环中的 `break` 永不触发，
+  于是「追溯至创世」变成死循环。
+  故轮回只实现为「守恒律 + 链式因果闭合」，不实现为图论意义上的环。
+- **可复算性**：第三方只需读 `reserve` 表（`asset_id` / `total_supply` /
+  `reserve_amount`）即可重跑残差算式，无需信任任何进程。
+
+## 3. 审计维度映射 (Audit Dimension Mapping)
+
+第负一章的每条可执行框架，在第二视角审计器中对应一个维度；
+维度总数由 `AuditReport.FIELDS` 派生，任何文档不得硬编码该数字。
+
+| 框架 | 审计维度 | 通过的判据 |
+|---|---|---|
+| 时间 | `temporal_defined`（既有维度，复用） | 方向为 forward 且回溯被禁止 |
+| 混沌 | `genesis_commitment` | 承诺有生产者、两侧相等、第三方重算命中账本 |
+| 无极 | `branch_space` | 分支树可重建且哈希链完整 |
+| 虚幻 | `representation_isolation` | 键不相交、无共享引用、承诺未被污染 |
+| 天道 | `fairness_invariant` | 阈值单一来源、无单方裁决通道、动态平衡在场 |
+| 轮回 | `conservation_law` | 守恒残差在容差内且因果链逐块闭合 |
+
+## 4. 复核指引 (Verification Guide)
+
+不信任本文件，直接重跑：
+
+```bash
+python tools/frames_smoke.py     # 56 项检查：本章自审 + 五条框架的生产-消费-复算闭环 + 跨重启耐久性
+python tools/reality_smoke.py    # 40 项检查：R1–R5 既有判据未受本规范影响
+```
+
+其中 `tools/frames_smoke.py` 含一条**回归探针**：构造一个只在配置里手写
+`sha256:abc` 的世界，断言它现在必须判 FAILED。该探针用于防止 R4 重新退化为
+「公示了但没执行」的形式合规。
+
+## 5. 边界声明 (Boundary Declaration)
+
+- 本规范只约束**结构**：它要求不变式有生产者、消费者与可复算式，
+  不主张任何哲学立场为真。
+- 六条框架的价值不在于其名称，而在于它们各自绑定了一个可被第三方重算的量。
+  剥离可复算性后，它们只是修辞，按本规范 §0 不得入章。
+- 本规范不改变 R1–R5 的既有判定行为；`tools/reality_smoke.py` 的 40 项检查
+  须继续全部通过，作为本规范未越界证据。

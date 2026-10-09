@@ -27,7 +27,7 @@
 
 <ul>
   <li><strong>端到端的账户与世界运行时</strong> —— 持久化哈希链账本、≥2/3 公投共识、需求驱动智能体、无头 tick 循环、REST + WebSocket API，以及多层账户系统（凭据 → 会话 → 分级授权 → 社交恢复）已被真正打通。</li>
-  <li><strong>第二视角认知审计器</strong>作为中立裁判 —— 一套 19 维合规审查（含一个功能性执行的认证安全维度），可按需对任意世界实例运行。</li>
+  <li><strong>第二视角认知审计器</strong>作为中立裁判 —— 一套 24 维合规审查（含一个功能性执行的认证安全维度与五个原始框架维度），可按需对任意世界实例运行。</li>
   <li><strong>地理分布式就绪</strong> —— 混合逻辑时钟、带迁移交接的空间分片、AOI 增量同步、带 Merkle 差异合并的分区守护，以及分层共识（数据中心内快环 + 跨数据中心 epoch），全部走真实 TCP，并经 3 节点本地集群冒烟测试验证。</li>
   <li><strong>AR / 边缘接入</strong> —— 用于设备凭据登录、AOI 视口同步与跨数据中心迁移的 Edge SDK，另有漫游、账户抽象与密钥轮换模块。</li>
 </ul>
@@ -64,6 +64,7 @@ python tools/cluster_smoke.py   # 3 节点本地地理分布式集群 —— 约
 python tools/edge_smoke.py      # AR 边缘接入路径 —— <1 秒
 python tools/wiring_smoke.py    # 账户抽象 / 密钥轮换 / 身份根 / 灵魂漫游 —— 约 2 秒
 python tools/reality_smoke.py   # 真实性基准 R1–R5 / 入驻门禁 / 公投 / 分叉 —— <1 秒
+python tools/frames_smoke.py    # 原始框架：R4 真实执行 · 分支空间 · 守恒律 —— <1 秒
 ```
 
 ### 编程式启动（参考世界）
@@ -79,7 +80,7 @@ genesis_proof = build_genesis_proof(device["secret"], {"genesis_id": "my-first-s
 soul_hash = derive_soul_hash(genesis_proof)
 world.spawn_agent(soul_hash=soul_hash, genesis_proof=genesis_proof)
 world.tick()
-print(world.audit_summary())       # 19 维第二视角审计
+print(world.audit_summary())       # 24 维第二视角审计
 ```
 
 ### API 服务
@@ -99,7 +100,7 @@ serve(world, host="0.0.0.0", port=8000)
 flowchart TB
     UP["🌍 世界运营者 / 旧世界参与者<br/>发起创世 · 提交事件与要入境的旧世界数据"]
 
-    RULES["📜 constitution_rules.py · constitution.py · law/<br/>写死公理、十条治理法与四套法，创世即锁定为只读信任根"]
+    RULES["📜 constitution_rules.py · constitution.py · law/<br/>写死公理、六条原始框架、十条治理法与四套法，创世即锁定为只读信任根"]
 
     BRIDGE["🛃 compatibility_bridge.py<br/>旧世界入境海关：语义清洗 · 物理常数核验 · 身份核验"]
 
@@ -166,9 +167,10 @@ flowchart TB
 
 本栈将规则（只读）、审计器（中立裁判）、实现与演示严格分离：
 
-- <strong>宪法规则</strong>（`constitution_rules.py`）：原始公理与十条治理法，锁定为根信任锚。`NOHN_LAW_AXIOMS` 是共享常量的唯一权威来源（重力、时间膨胀、单位尺度、灵魂哈希长度、预言机最小信源数）。
+- <strong>宪法规则</strong>（`constitution_rules.py`）：原始公理、<strong>六条原始框架（第负一章）</strong>与十条治理法，锁定为根信任锚。`NOHN_LAW_AXIOMS` 是共享常量的唯一权威来源（重力、时间膨胀、单位尺度、灵魂哈希长度、预言机最小信源数、创世熵种子长度、守恒容差）。
+- <strong>原始框架</strong>（`constitution_rules.PRIMORDIAL_FRAMES`，第负一章）：六条 —— <em>时间 · 混沌 · 无极（太极） · 虚幻 · 天道 · 轮回</em>。入章受 <strong>M1 纪律</strong>约束：一条框架只有在同时具备 <em>生产者</em>（`system/` 中的执行点）、<em>消费者</em>（`audit_engine.py` 中的审计维度）、<em>复算式</em>（第三方可重跑）与 <em>边界条款</em>时，才可进入宪法层。只写概念而无执行点的「框架」，按本仓库 R4「公示即执行」的同一标准就是虚幻——因此 `primordial_completeness()` 让本章自审。也正因如此，虚幻随附硬边界（只允许存在于表征层，永不进入执行层），轮回实现为「守恒律 + 链式因果闭合」而<em>绝不</em>实现为环——一环会使 `CausalClosure.trace_chain(depth=-1)` 永不终止。
 - <strong>审计引擎</strong>（`audit_engine.py`）：第二视角认知审计器 —— `ResponsibilityAccount` + 可插拔 `AuditPlugin` + `CognitiveAuditEngine`（反事实 `reconstruct()`）+ `SecondPerspectiveAuditor`。运行 19 维合规审查；其中认证安全维度是在隔离的内存世界中功能性执行账户栈，而非探测属性。
-- <strong>法律</strong>（`law/`）：四份人类可读标准 —— 通信协议 · 全球统一经济（货币、锚定、储备证明、兑付） · 身份认证（绑定灵魂哈希，含 V2.2 凭据恢复条款） · <strong>真实性基准（V3.0）</strong>，其立论是<em>虚拟世界必须是一个真实的世界</em>。此处把「真实」当作<strong>结构性</strong>属性而非数值属性：真实来自规则的不变性 —— 创世锁定、全域一致、因果闭合、公示即执行、完备声明 —— 而不来自数值是否等于地球值。一个重力为 3.7&nbsp;m/s² 的世界，只要该值创世锁定且被实际执行，它就是真实的；一个重力为 9.80665、却可被运营方后台改写的世界，不是真实的世界。判据为 R1–R5，且真实性已作为入驻门禁强制执行。其机器可读的 JSON-Schema 对应物位于 `system/protocol.py`，驱动入驻校验。
+- <strong>法律</strong>（`law/`）：五份人类可读标准 —— 通信协议 · 全球统一经济（货币、锚定、储备证明、兑付） · 身份认证（绑定灵魂哈希，含 V2.2 凭据恢复条款） · <strong>真实性基准（V3.0）</strong>，其立论是<em>虚拟世界必须是一个真实的世界</em>。此处把「真实」当作<strong>结构性</strong>属性而非数值属性：真实来自规则的不变性 —— 创世锁定、全域一致、因果闭合、公示即执行、完备声明 —— 而不来自数值是否等于地球值。一个重力为 3.7&nbsp;m/s² 的世界，只要该值创世锁定且被实际执行，它就是真实的；一个重力为 9.80665、却可被运营方后台改写的世界，不是真实的世界。判据为 R1–R5，且真实性已作为入驻门禁强制执行。其机器可读的 JSON-Schema 对应物位于 `system/protocol.py`，驱动入驻校验。第五份标准《原始框架规范》把上述六条原框架的机械锚点与复算式成文化（见 `law/Primordial frames standard`）。
 - <strong>系统</strong>（`system/`，23 个模块）：真实实现层 —— 账本、共识、智能体引擎、无头运行时、REST/WS API、协议 schema、账户系统各层、地理分布子系统与边缘接入。见下方模块表。
 - <strong>桥</strong>（`compatibility_bridge.py`）：遗留世界进入 Nohn 领地的海关检查站 —— `translate_intent()` 语义清洗、`check_physics_constants()` 物理校验、`verify_soul_hash()` 身份核验。
 
@@ -271,6 +273,7 @@ STORAGE=postgres DATABASE_URL=postgresql://user:pass@db:5432/world python -m sys
 | `tools/edge_smoke.py` | 边缘设备：凭据登记、挑战登录、AOI 视口增量、最近数据中心路由、跨数据中心迁移、撤销 | <1 秒 |
 | `tools/wiring_smoke.py` | 账户抽象（会话密钥签发 → 挑战 → 执行 → 约束 → 撤销）、密钥轮换（退役可验证 / 撤销即失效）、身份根（Shamir 3-of-5 恢复）、灵魂漫游（签发 → 篡改拒绝 → 验证 → 映射） | 约 2 秒 |
 | `tools/reality_smoke.py` | 真实性基准 R1–R5（创世锁定 / 全域一致 / 因果闭合 / 公示即执行 / 反应表完备）、`reality` 入驻门禁、公投 fail-closed 行为、以及「变更唯一路径是分叉」（父世界不被改写、子世界同样锁定）—— 共 40 项检查 | <1 秒 |
+| `tools/frames_smoke.py` | 原始框架（第负一章）：本章自审（M1 纪律）、熵种子并入承诺、R4 <strong>真实执行</strong>并附回归探针（证明旧的手写字面量现已失败）、分支树从账本独立重建、表征层隔离、公平形式不可变、守恒律（含对故意破损账本的检出），以及重启后分叉编号仍不撞号 —— 共 56 项检查 | <1 秒 |
 
 **想自己设计测试？** 见 **[VERIFICATION-zh.md](VERIFICATION-zh.md)** —— 面向独立团队的声明清单、接入接口与测试设计技法。
 
@@ -324,7 +327,7 @@ ok, failures = ProtocolValidator().validate(world_config)
 
 ```text
 Second-Reality/
-├── constitution_rules.py        # 宪法：公理 + 十条治理法 + NOHN_LAW_AXIOMS
+├── constitution_rules.py        # 宪法：公理 + 原始框架（第负一章） + 十条治理法 + NOHN_LAW_AXIOMS
 ├── audit_engine.py              # 第二视角审计器：19 维合规审查
 ├── constitution.py              # 聚合层（向后兼容的再导出）
 ├── compatibility_bridge.py      # 遗留世界"海关"：语义 / 物理 / 灵魂 校验
@@ -354,8 +357,8 @@ Second-Reality/
 │   ├── cluster.py               #   集群接线 + 心跳 + 分发器
 │   ├── edge_sdk.py              #   AR / 边缘设备接入 SDK
 │   └── soul_roaming.py          #   跨世界漫游证书 + 灵魂映射（/roaming/*）
-├── law/                         # 通信 / 经济 / 身份 / 物理 标准（文本）
-├── tools/                       # cluster_smoke / edge_smoke / 文档生成工具
+├── law/                         # 通信 / 经济 / 身份 / 物理 / 原始框架 标准（文本）
+├── tools/                       # cluster_smoke / edge_smoke / frames_smoke / 文档生成工具
 ├── reports/                     # 导出的专家评审报告
 ├── assets/                      # banner.svg/png、overview.svg/png
 ├── .gitignore

@@ -65,6 +65,11 @@ NOHN_LAW_AXIOMS = {
     "soul_hash_len": 64,
     # 经济（law/Global economic unified standard）
     "oracle_min_sources": 3,     # 波动资产预言机独立来源下限
+    # 原始框架（第负一章 · Primordial Frames）
+    # 与物理常数同理：此处是唯一权威来源，system/ 层与审计层只读，不得重复硬编码。
+    "genesis_seed_bytes": 32,        # 混沌：创世熵种子字节长度
+    "genesis_seed_default": 0,       # 混沌：未显式注入创世种子时的确定性默认值
+    "conservation_tolerance": 1e-9,  # 轮回：守恒残差容差（绝对值上限）
 }
 
 # 治理公理十 / 第一条：全球公投通过阈值（≥2/3 超多数，单一权威来源）
@@ -74,6 +79,30 @@ CONSENSUS_THRESHOLD = 2.0 / 3.0
 def _safe_get(obj, key, default=None):
     """从 dict 或 object 安全获取属性，统一 law 层审计与合规校验中的取值逻辑。"""
     return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+
+
+def _canonical_axiom_payload(value: Any) -> Any:
+    """
+    把常数集规范化成可被 json 序列化的形式（承诺哈希的唯一输入标准化器）。
+
+    为什么需要它：创世时真实注入的 element_reactions 使用**元组键**
+    （如 ("fire", "water") → "evaporation"），而 json.dumps 拒绝非
+    str/int/float/bool/None 的键。若不在此归一，只要世界含要素反应表，
+    commitment() 就会抛 TypeError——R4 的算子在任何真实世界上都不可用。
+
+    归一规则：
+    - dict：键一律 str() 化，值递归归一
+    - list / tuple：逐项递归归一（元组同时降为列表，保证同集合同哈希）
+    - 其余：原样返回，交给 json 的 default=str 兜底
+
+    向后兼容：对只含字符串键与标量的常数集（即有巡检所用的最小集），
+    归一结果与原实现完全一致，故哈希逐字节不变。
+    """
+    if isinstance(value, dict):
+        return {str(k): _canonical_axiom_payload(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonical_axiom_payload(v) for v in value]
+    return value
 
 
 # ============================================================
@@ -436,18 +465,28 @@ class ImmutableWorldRule:
         self._physics_locked = bool(physics_constants)
         self.rule_modification_log = []  # 任何"尝试修改"的记录
 
-    def commitment(self) -> str:
+    def commitment(self, seed: Optional[int] = None) -> str:
         """
         R4 公示即执行：对当前常数集计算承诺哈希。
 
         审计方用同一算法重算，与账本锚定的哈希比对；不一致即判定为不真实。
         常数集按 key 排序后序列化，保证同一集合在任何进程/平台得到同一哈希。
+
+        seed（第负一章 · 混沌）：创世熵种子。
+        向后兼容硬约束：seed 省略（None）时输出与既有版本**逐字节一致**——
+        既有分叉凭证（_fork_world 内的 commitment()）与巡检断言不得因本参数改变。
+        提供时把种子并入承诺：否则「同常数集、不同种子」的两个世界会拿到同一个
+        R4 承诺哈希，而两者 state_root 不同——R4 会表面通过、实际演化不一致。
         """
         payload = json.dumps(
-            {str(k): v for k, v in sorted(self.physics_constants.items(),
-                                          key=lambda kv: str(kv[0]))},
+            _canonical_axiom_payload({
+                str(k): v for k, v in sorted(self.physics_constants.items(),
+                                             key=lambda kv: str(kv[0]))
+            }),
             ensure_ascii=False, sort_keys=True, default=str,
         )
+        if seed is not None:
+            payload = f"{payload}|seed:{int(seed)}"
         return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def set_physics_constants(self, constants: Dict) -> bool:
@@ -1177,3 +1216,195 @@ class DecentralizationGovernance:
     def _has_global_consensus(self, action: Dict) -> bool:
         """验证是否达成全球共识（≥2/3 公投通过）"""
         return True
+
+
+# ============================================================
+# 第负一章：原始框架（Primordial Frames）—— 六条不可变原框架
+# ------------------------------------------------------------
+# 定位：本章位于构成公理（第零章）之下，回答一个更前置的问题——
+# 一个世界在拥有空间 / 时间 / 因果 / 存在 / 创世之前，它的前提是什么。
+#
+# 【入章纪律 M1（强制）】任何一条原框架必须先同时给出四样东西，
+# 否则不得入本章，只能留在文档层（GLOSSARY / law）：
+#   statement : 概念陈述（人话，可被非工程角色理解）
+#   producer  : 在世界里生产该不变式的执行点（system/ 层模块与方法）
+#   consumer  : 消费并判定该不变式的审计点（audit_engine 的维度名）
+#   recompute : 第三方独立复算该不变式的算式（可被外部重跑）
+#
+# 为什么这条纪律是强制的：只写概念、没有执行点的「框架」，按本仓库
+# R4「公示即执行」的同一标准，就是「虚幻」。把虚幻制度化比不加更坏——
+# 它会制造第二个「公示了但没执行」的条款。primordial_completeness()
+# 对本章做自审，任一要素缺失即判为不可入章。
+#
+# 【权威源纪律 M2（强制）】本章与 system/ 层、audit_engine 层均不得
+# 硬编码任何数值常数；一切数值一律取自 NOHN_LAW_AXIOMS（单一权威来源）。
+# ============================================================
+
+PRIMORDIAL_FRAMES: Dict[str, Dict[str, Any]] = {
+    # ------------------------------------------------------------
+    # 一 · 时间：唯一一条「机械锚点已先行存在」的框架，本章零新增代码
+    # ------------------------------------------------------------
+    "time": {
+        "statement": (
+            "时间就是时间——世界得以流动的前提，绝对的第一真理；"
+            "不可逆，不可对抗，亦不可触碰。"
+        ),
+        "producer": (
+            "constitution_rules.TemporalSubstrate.define_temporal_properties"
+            "（创世锁 _temporal_locked，direction 仅允许 'forward'）"
+            " + system/runtime.py 创世装配"
+        ),
+        "consumer": "audit_engine.temporal_defined",
+        "recompute": (
+            "direction == 'forward' 且 is_retrocausality_permitted() is False"
+        ),
+        "boundary": (
+            "不接受任何回溯或时间线覆写。已锁定的时间属性只能经 "
+            "propose_amendment 分叉新世界，不得在原世界打补丁。"
+        ),
+    },
+    # ------------------------------------------------------------
+    # 二 · 混沌：新增生产者——熵种子并入创世承诺哈希
+    # ------------------------------------------------------------
+    "chaos": {
+        "statement": (
+            "混沌是原初宇宙的起点，万事万物的能量本根，如分子般无规则地涌动。"
+        ),
+        "producer": (
+            "system/runtime.py World.__init__(genesis_seed)"
+            " → ImmutableWorldRule.commitment(seed)"
+        ),
+        "consumer": "audit_engine.genesis_commitment",
+        "recompute": (
+            "sha256(canonical(physics_constants) + '|seed:{seed}')"
+            " == 账本锚定的承诺哈希，且 published == ledger"
+        ),
+        "boundary": (
+            "【硬边界】混沌必须是可复算的确定性熵种子，不得使用真随机"
+            "（os.urandom / secrets）。真随机会让同一创世参数在不同副本上"
+            "产生不同初始分布，直接违反 R2 全域一致。"
+        ),
+    },
+    # ------------------------------------------------------------
+    # 三 · 无极（太极）：新增生产者——分叉凭证锚进账本，构成分支树
+    # ------------------------------------------------------------
+    "wuji": {
+        "statement": (
+            "无极即太极，是最初之始，亦是最终之终，更容纳着未来的无限分支。"
+        ),
+        "producer": (
+            "system/runtime.py World.fork_world() → 分叉凭证追加进 HistoryLedger；"
+            "并网世界注册由 system/ 层负责（对齐 ImmutableWorldRule._fork_world 注释）"
+        ),
+        "consumer": "audit_engine.branch_space",
+        "recompute": (
+            "遍历 history 中 event == 'world_fork' 的区块，重建 "
+            "parent_world_id → [fork_id] 的分支树；根为创世世界，"
+            "且 history.validate_chain() 必须为真"
+        ),
+        "boundary": (
+            "分支是复制出新世界，不是原地升级——父世界的 physics_constants "
+            "在分叉后不得被改写（R1）。迁移由居民自愿选择，不自动搬迁。"
+        ),
+    },
+    # ------------------------------------------------------------
+    # 四 · 虚幻：新增生产者——表征层容器；并立硬边界条款
+    # ------------------------------------------------------------
+    "illusion": {
+        "statement": (
+            "虚幻是现实的反面，与现实一体两面，为一切谎言与梦境提供基底"
+            "——亦真亦假亦如梦。"
+        ),
+        "producer": "system/runtime.py World.representations（表征层：信念 / 传闻 / 梦境）",
+        "consumer": "audit_engine.representation_isolation",
+        "recompute": (
+            "set(representations.keys()) ∩ set(physics_constants.keys()) == ∅，"
+            "且表征层写入前后 physics_commitment 与 state_root 不变"
+        ),
+        "boundary": (
+            "【硬边界】虚幻只能存在于表征层。一旦进入执行层"
+            "（physics_constants / 账本 / 共识 / 承诺哈希的输入），"
+            "即等于给「规则可被后台偷改」开后门，直接打穿 "
+            "R1 创世锁定、R3 因果闭合、R4 公示即执行。"
+        ),
+    },
+    # ------------------------------------------------------------
+    # 五 · 天道：形式条件不可变，数值阈值仍由公投决定
+    # ------------------------------------------------------------
+    "heavenly_way": {
+        "statement": (
+            "天道是公平本身——相对的公平，对万物一视同仁，维系世间的动态平衡。"
+        ),
+        "producer": (
+            "constitution_rules.CONSENSUS_THRESHOLD（单一权威阈值）"
+            " + DecentralizationGovernance 的硬编码禁止项"
+            "（shutdown_world / freeze_soul，恒返回 False）"
+        ),
+        "consumer": "audit_engine.fairness_invariant",
+        "recompute": (
+            "CONSENSUS_THRESHOLD == 2/3 且 shutdown_world() / freeze_soul() / "
+            "WorldPerpetuity.is_shutdown_legal() 仍恒返回 False（无超级用户通道）"
+        ),
+        "boundary": (
+            "不可变的是公平的**形式条件**（一视同仁、不许单方裁决、无超级用户通道）；"
+            "具体阈值（投票率下限、财富上限等）仍由 ≥2/3 公投决定，"
+            "不得随本条一并冻结——否则与第一条 propose_amendment 直接矛盾。"
+        ),
+    },
+    # ------------------------------------------------------------
+    # 六 · 轮回：守恒律 + 链式因果闭合；禁止实现为因果图成环
+    # ------------------------------------------------------------
+    "samsara": {
+        "statement": (
+            "轮回在万事万物中无处不在，不止是能量的循环；能量动态守恒，"
+            "每一个因就是下一个果。"
+        ),
+        "producer": (
+            "system/ledger.py EconomicReserve.conservation_residual()"
+            " + HistoryLedger 哈希链（每块 block_hash 链接前块 prev_hash）"
+        ),
+        "consumer": "audit_engine.conservation_law",
+        "recompute": (
+            "residual = Σ_assets max(0, total_supply − reserve_amount)，须 "
+            "≤ NOHN_LAW_AXIOMS['conservation_tolerance']；"
+            "且 history.validate_chain() 为真（每个果都指向前一个因）"
+        ),
+        "boundary": (
+            "【硬边界】轮回不得实现为因果图成环。CausalClosure.trace_chain(depth=-1) "
+            "在环内不会终止（causes 永不为空，while 无 break），会把"
+            "「追溯至创世」变成死循环。故轮回只实现为「守恒律 + 链式因果闭合」，"
+            "不实现为图论意义上的环。"
+        ),
+    },
+}
+
+
+def primordial_completeness() -> Dict[str, Any]:
+    """
+    第负一章自审（M1 入章纪律的可执行形式）。
+
+    逐条检查原框架的五个要素是否齐备；缺任一即该框架不得作为宪法级
+    原框架，只能降级到文档层。这样「原框架」不会退化为无法复算的口号。
+
+    返回::
+
+        {
+          "complete":   ["time", "chaos", ...],          # 可入宪法的框架
+          "incomplete": {"<name>": ["producer", ...]},   # 缺要素的框架及缺口
+          "is_complete": True/False,                     # 本章整体是否自洽
+        }
+    """
+    required = ("statement", "producer", "consumer", "recompute", "boundary")
+    complete: List[str] = []
+    incomplete: Dict[str, List[str]] = {}
+    for name, frame in PRIMORDIAL_FRAMES.items():
+        missing = [key for key in required if not frame.get(key)]
+        if missing:
+            incomplete[name] = missing
+        else:
+            complete.append(name)
+    return {
+        "complete": complete,
+        "incomplete": incomplete,
+        "is_complete": not incomplete,
+    }
