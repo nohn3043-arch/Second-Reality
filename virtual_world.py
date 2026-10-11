@@ -599,34 +599,68 @@ class NohnWorld:
         with open(fp,'w',encoding='utf-8') as f: json.dump(self.export_state(),f,ensure_ascii=False,indent=2,default=str)
 
 # ============================================================
-# GUI Visualization (pygame)
 # ============================================================
-WORLD_SIZE=60; CELL=10; STATS_H=200
-WW=WORLD_SIZE*CELL+300; WH=WORLD_SIZE*CELL+STATS_H
-COLORS={"bg":(20,20,30),"grid":(40,40,55),
-    "food":(100,200,100),"water":(80,150,255),"wood":(139,90,43),
-    "stone":(150,150,160),"herb":(100,220,150),"ore":(180,140,100),"fruit":(255,160,80),
-    "house":(180,140,100),"market":(200,180,80),"workshop":(160,120,80),
-    "garden":(100,200,100),"library":(150,130,220),
-    "agent_idle":(200,200,200),"agent_working":(255,220,80),
-    "agent_socializing":(255,150,200),"agent_resting":(100,150,255),
-    "agent_trading":(80,255,180),"agent_learning":(180,150,255),
-    "agent_creating":(255,100,100),"agent_dead":(60,60,60),
-    "text":(220,220,220),"need_high":(80,220,100),"need_mid":(220,200,80),"need_low":(220,80,80),
-    "bar_bg":(50,50,65),"panel":(25,25,40),
-    "chart_bg":(16,16,26),"chart_line":(60,60,80),
-    "warm":(196,72,40),"friend":(74,106,150),"partner":(255,150,200),
-    "tip_bg":(16,16,24),"tip_border":(120,120,150),
-    "curve_pop":(120,220,255),"curve_gini":(255,190,90),
-    "curve_need":(120,230,140),"curve_money":(220,140,255)}
+# GUI Visualization (pygame) — Anime Isometric 2.5D Renderer
+# 铁律：本段只负责“画”，不触碰仿真 / 账本 / 审计逻辑。
+#       同 seed 的世界状态哈希与旧版像素渲染完全一致（可验证）。
+# ============================================================
+import pygame
+WORLD_SIZE=60; CELL=32; STATS_H=240
+WW=WORLD_SIZE*CELL+350; WH=WORLD_SIZE*CELL+STATS_H
+MAP_W=WORLD_SIZE*CELL; MAP_H=WORLD_SIZE*CELL   # 1920×1920 地图视口
+PANEL_W=WW-MAP_W                                # 右侧面板 350px
 
-# 代际配色：眼不看文字也能认出第几代
-GEN_COLORS=[(30,30,30),(130,80,190),(0,150,150),(180,90,0),(0,70,190),(150,0,90)]
+# ---- 等距投影（经典 2:1 菱形）----
+TW=32; TH=16; TW2=TW//2; TH2=TH//2
+OX=MAP_W//2                                    # 水平居中
+OY=520                                         # 竖直位置：顶部留天空
+ISLAND_BOTTOM=OY+(WORLD_SIZE*2-2)*TH2+TH2      # 岛底边
 
-# 事件流标签与配色（用于右侧滚动事件与网格浮字）
+def tile_center(gx,gy):
+    return (OX+(gx-gy)*TW2, OY+(gx+gy)*TH2)
+def grid_ground(gx,gy):
+    x,y=tile_center(gx,gy); return (x,y+TH2)
+def screen_to_grid(mx,my):
+    dx=mx-OX; dy=my-OY
+    a=dx/TW2; b=dy/TH2
+    gx=int(round((a+b)/2.0)); gy=int(round((b-a)/2.0))
+    if 0<=gx<WORLD_SIZE and 0<=gy<WORLD_SIZE: return gx,gy
+    return None
+
+# ---- 动漫调色板 ----
+PAL={"sky_top":(118,176,236),"sky_bot":(216,238,248),"cloud":(255,255,255),
+     "sun":(255,218,120),"sun_hi":(255,242,196),
+     "grass_a":(146,204,124),"grass_b":(126,186,112),"grass_hi":(170,222,148),
+     "grass_edge":(88,140,88),"ink":(38,34,44),"skin":(255,226,200),
+     "panel":(23,25,42),"panel_2":(36,40,66),"gold":(245,200,90),
+     "text":(228,234,242),"text_dim":(168,178,198),"bar_bg":(52,56,80),
+     "chart_bg":(16,18,32),"chart_line":(60,64,90),"blush":(255,140,150),
+     "shadow":(30,40,70)}
+
+COLORS={"bg":(15,15,25),"grid":(35,35,50),
+    "food":(80,180,80),"water":(60,140,220),"wood":(120,80,40),
+    "stone":(130,130,140),"herb":(80,200,130),"ore":(160,120,80),"fruit":(220,140,60),
+    "house":(160,120,80),"market":(180,160,60),"workshop":(140,100,60),
+    "garden":(80,180,80),"library":(130,110,200),
+    "agent_idle":(190,192,200),"agent_working":(240,196,72),
+    "agent_socializing":(236,132,188),"agent_resting":(96,146,232),
+    "agent_trading":(72,224,168),"agent_learning":(172,138,232),
+    "agent_creating":(236,96,96),"agent_dead":(50,50,50),
+    "text":(200,200,200),"need_high":(96,222,110),"need_mid":(238,196,80),"need_low":(238,90,90),
+    "bar_bg":(40,40,55),"panel":(20,20,35),
+    "chart_bg":(12,12,22),"chart_line":(50,50,70),
+    "warm":(170,60,30),"friend":(60,90,130),"partner":(220,130,180),
+    "tip_bg":(12,12,20),"tip_border":(100,100,130),
+    "curve_pop":(110,206,232),"curve_gini":(238,182,84),
+    "curve_need":(110,216,132),"curve_money":(210,132,232)}
+
+# 代际配色 = 发色：眼不看字也能认出第几代
+GEN_COLORS=[(52,50,58),(150,92,208),(40,160,158),(196,104,40),(52,96,210),(176,52,116)]
+
+# 事件流标签与配色
 EVENT_LABEL={"birth":"出生","death":"死亡","marriage":"结婚","produce":"生产","trade":"交易",
     "interact":"社交","rest":"休息","ubi":"UBI","tax":"税收","violation":"违规"}
-EVENT_COLOR={"birth":(120,230,255),"death":(150,150,170),"marriage":(255,150,200),
+EVENT_COLOR={"birth":(120,230,255),"death":(160,160,180),"marriage":(255,150,200),
     "trade":(80,255,180),"violation":(230,90,90)}
 
 # 显式候选字体文件：SysFont 在部分环境匹配不到中文字体，会把中文渲染成方块
@@ -643,8 +677,20 @@ RES_LABELS={"food":"食物","water":"水","wood":"木材","stone":"石料",
     "herb":"草药","ore":"矿石","fruit":"水果"}
 BLD_LABELS={"house":"住宅","market":"集市","workshop":"工坊","garden":"花园","library":"图书馆"}
 
+BUILDING_STYLE={"house":{"h":20,"top":(216,118,106),"wall":(226,170,132)},
+    "market":{"h":16,"top":(218,150,78),"wall":(240,198,142)},
+    "workshop":{"h":16,"top":(180,142,110),"wall":(152,120,94)},
+    "garden":{"h":12,"top":(130,198,112),"wall":(152,192,132)},
+    "library":{"h":20,"top":(140,120,202),"wall":(122,104,178)}}
+
+def _lerp_color(c1,c2,t):
+    t=max(0.0,min(1.0,t))
+    return tuple(int(c1[i]+(c2[i]-c1[i])*t) for i in range(3))
+def _darken(c,f): return tuple(max(0,int(c[i]*f)) for i in range(3))
+def _hash2(x,y):
+    h=(x*73856093 ^ y*19349663) & 0xffffffff
+    return h/0xffffffff
 def _gini(values):
-    """基尼系数：0=完全平均，1=完全不均。用于把"贫富分化"变成可看的数字。"""
     xs=[max(0.0,v) for v in values]
     if not xs: return 0.0
     s=sum(xs)
@@ -653,19 +699,245 @@ def _gini(values):
     cum=sum((2*i-n-1)*x for i,x in enumerate(xs,1))
     return max(0.0,min(1.0,cum/(n*s)))
 
-def _lerp_color(c1,c2,t):
-    t=max(0.0,min(1.0,t))
-    return tuple(int(c1[i]+(c2[i]-c1[i])*t) for i in range(3))
+def _rounded(surf,rect,color,radius=6,outline=None,ow=1,alpha=None):
+    if alpha is not None:
+        s=pygame.Surface((max(1,int(rect.w)),max(1,int(rect.h))),pygame.SRCALPHA)
+        pygame.draw.rect(s,tuple(color)+(alpha,),s.get_rect(),border_radius=radius)
+        if outline is not None: pygame.draw.rect(s,tuple(outline)+(alpha,),s.get_rect(),ow,border_radius=radius)
+        surf.blit(s,(int(rect.x),int(rect.y))); return
+    pygame.draw.rect(surf,color,rect,border_radius=radius)
+    if outline is not None: pygame.draw.rect(surf,outline,rect,ow,border_radius=radius)
+
+# ---- 静态图层：天空 + 地面瓦片（一次性预渲染，逐帧 blit，性能友好）----
+def build_sky(seed):
+    s=pygame.Surface((MAP_W,MAP_H))
+    for y in range(MAP_H):
+        t=y/MAP_H
+        c=[int(PAL["sky_top"][i]+(PAL["sky_bot"][i]-PAL["sky_top"][i])*t) for i in range(3)]
+        pygame.draw.line(s,c,(0,y),(MAP_W,y))
+    # 太阳（柔光晕）
+    sx,sy=150,132
+    for rr,al in ((78,10),(56,26),(38,62)):
+        g=pygame.Surface((rr*2,rr*2),pygame.SRCALPHA)
+        pygame.draw.circle(g,(255,224,150,al),(rr,rr),rr)
+        s.blit(g,(sx-rr,sy-rr))
+    pygame.draw.circle(s,PAL["sun_hi"],(sx-7,sy-7),23)
+    pygame.draw.circle(s,PAL["sun"],(sx,sy),23)
+    # 云（手绘感圆斑）
+    clouds=[(430,118),(990,78),(1510,148),(770,212),(1680,86),(240,260)]
+    for cx,cy in clouds:
+        for dx,dy,rr in ((0,0,22),(-18,6,18),(19,7,20),(-7,12,17),(11,13,16)):
+            pygame.draw.circle(s,PAL["cloud"],(cx+dx,cy+dy),rr)
+    return s
+
+def build_ground(seed):
+    """手绘感草地瓦片 + 岛边缘 + 岛下阴影，预渲染一次"""
+    s=pygame.Surface((MAP_W,MAP_H))
+    for gx in range(WORLD_SIZE):
+        for gy in range(WORLD_SIZE):
+            cx,cy=tile_center(gx,gy)
+            n=_hash2(gx+seed,gy*3+seed)
+            base=_lerp_color(PAL["grass_a"],PAL["grass_b"],n)
+            pts=[(cx,cy-TH2),(cx+TW2,cy),(cx,cy+TH2),(cx-TW2,cy)]
+            pygame.draw.polygon(s,base,pts)
+            # 上半面提亮（赛璐璐两段式受光）
+            pygame.draw.polygon(s,_lerp_color(base,PAL["grass_hi"],0.55),
+                [(cx,cy-TH2),(cx+TW2,cy),(cx-TW2,cy)])
+            # 手绘噪声：草叶/小花
+            if n>0.84:
+                pygame.draw.line(s,_darken(base,0.8),(cx-2,cy-2),(cx-3,cy+1),1)
+                pygame.draw.line(s,_darken(base,0.8),(cx+1,cy-3),(cx+2,cy),1)
+            elif n>0.72:
+                pc=(252,220,180) if n>0.78 else (255,240,220)
+                pygame.draw.circle(s,pc,(cx+3,cy-3),1)
+            elif n<0.10:
+                pygame.draw.circle(s,(112,168,120),(cx-3,cy+2),1)
+    # 岛轮廓（粗描边 = 手绘 inking）
+    top=tile_center(0,0); right=tile_center(WORLD_SIZE-1,0)
+    bot=tile_center(WORLD_SIZE-1,WORLD_SIZE-1); left=tile_center(0,WORLD_SIZE-1)
+    rim=[top,(right[0],right[1]+TH2),(bot[0],bot[1]+TH2),(left[0],left[1]+TH2)]
+    pygame.draw.polygon(s,PAL["grass_edge"],rim,3)
+    return s
+
+def build_island_shadow():
+    s=pygame.Surface((MAP_W,MAP_H),pygame.SRCALPHA)
+    pygame.draw.ellipse(s,(40,70,120,46),(OX-1150,ISLAND_BOTTOM+26,2300,220))
+    pygame.draw.ellipse(s,(40,70,120,30),(OX-1030,ISLAND_BOTTOM+38,2060,170))
+    return s
+
+# ---- 实体绘制 ----
+def _draw_shadow(overlay,gxp,gyp,w=16,d=6):
+    pygame.draw.ellipse(overlay,PAL["shadow"]+(95,),(gxp-w//2,gyp-2,w,d))
+
+def draw_building_anim(screen,overlay,b,tick):
+    gx,gy=b["pos"]; t=b["type"]
+    st=BUILDING_STYLE.get(t,BUILDING_STYLE["house"])
+    h=st["h"]
+    gxp,gyp=grid_ground(gx,gy)
+    _draw_shadow(overlay,gxp,gyp,30,8)
+    top=[(gxp,gyp-h-TH2),(gxp+TW2,gyp-h),(gxp,gyp-h+TH2),(gxp-TW2,gyp-h)]
+    front=[(gxp-TW2,gyp-h),(gxp,gyp-h+TH2),(gxp,gyp+TH2),(gxp-TW2,gyp)]
+    right=[(gxp,gyp-h+TH2),(gxp+TW2,gyp-h),(gxp+TW2,gyp),(gxp,gyp+TH2)]
+    pygame.draw.polygon(screen,_darken(st["wall"],0.62),front)
+    pygame.draw.polygon(screen,_darken(st["wall"],0.44),right)
+    pygame.draw.polygon(screen,st["top"],top)
+    for poly in (front,right,top):
+        pygame.draw.polygon(screen,PAL["ink"],poly,2)
+    pygame.draw.line(screen,PAL["ink"],(gxp-TW2,gyp-h),(gxp-TW2,gyp),2)
+    pygame.draw.line(screen,PAL["ink"],(gxp,gyp-h+TH2),(gxp,gyp+TH2),2)
+    # 类型装饰
+    if t=="house":
+        pygame.draw.line(screen,_darken(st["top"],0.7),(gxp,gyp-h-TH2),(gxp,gyp-h+TH2),2)
+        pygame.draw.rect(screen,_darken(st["wall"],0.75),(gxp-3,gyp,6,4),border_radius=1)
+    elif t=="market":
+        for i in range(4):
+            f=i/4.0
+            px1=gxp-TW2+f*TW2; py1=gyp-h+f*TH2
+            px2=gxp-TW2+(f+0.25)*TW2; py2=gyp-h+(f+0.25)*TH2
+            col=(242,232,210) if i%2==0 else (224,110,104)
+            pygame.draw.polygon(screen,col,
+                [(px1,py1),(px2,py2),(px2+2,py2+6),(px1+2,py1+6)])
+            pygame.draw.line(screen,PAL["ink"],(px1,py1),(px1+2,py1+6),1)
+    elif t=="workshop":
+        pygame.draw.rect(screen,_darken(st["wall"],0.7),(gxp+2,gyp-h-8,5,8))
+        pygame.draw.rect(screen,_darken(st["top"],0.8),(gxp+3,gyp-h-9,3,2))
+        sm=(int((tick+_hash2(gx,gy)*14)%14))
+        pygame.draw.circle(screen,(216,214,220),(gxp+6,gyp-h-14-sm),3)
+        pygame.draw.circle(screen,(216,214,220),(gxp+9,gyp-h-18-sm),2)
+        pygame.draw.circle(screen,(216,214,220),(gxp+4,gyp-h-20-sm),1)
+    elif t=="garden":
+        for dx,dy,cc in ((-7,-1,(252,170,190)),(0,2,(250,226,140)),(7,-1,(160,200,240))):
+            pygame.draw.circle(screen,cc,(gxp+dx,gyp-h+dy),3)
+            pygame.draw.circle(screen,PAL["ink"],(gxp+dx,gyp-h+dy),3,1)
+        for i in range(4):
+            fx=gxp-TW2+2+i*(((TW2*2)-4)//4)
+            pygame.draw.line(screen,_darken(st["wall"],0.9),(fx,gyp-h+2),(fx,gyp+4),2)
+    elif t=="library":
+        books=[(226,120,120),(120,160,220),(226,200,110),(150,160,220),(226,150,190)]
+        for i,cc in enumerate(books):
+            f=(i+0.5)/5.0
+            px1=gxp-TW2+f*TW2
+            pygame.draw.line(screen,cc,(px1,gyp-h+f*TH2-2),(px1,gyp+f*TH2+1),4)
+        pygame.draw.rect(screen,(110,92,160),(gxp-3,gyp-2,6,6),border_radius=1)
+
+def draw_resource_anim(screen,overlay,r):
+    gx,gy=r["pos"]; t=r["type"]
+    gxp,gyp=grid_ground(gx,gy)
+    s=int(min(12,max(6,5+r["amount"]//3)))
+    _draw_shadow(overlay,gxp,gyp,12,4)
+    ink=PAL["ink"]
+    if t=="food":     # 绿苹果
+        pygame.draw.circle(screen,ink,(gxp,gyp-s//2),4)
+        pygame.draw.circle(screen,(122,206,96),(gxp,gyp-s//2),3)
+        pygame.draw.line(screen,ink,(gxp,gyp-s//2-3),(gxp,gyp-s//2-5),2)
+        pygame.draw.ellipse(screen,(120,196,110),(gxp+1,gyp-s//2-6,5,3))
+    elif t=="fruit":  # 红莓
+        pygame.draw.circle(screen,ink,(gxp-3,gyp-s//4),3)
+        pygame.draw.circle(screen,ink,(gxp+3,gyp-s//4),3)
+        pygame.draw.circle(screen,ink,(gxp,gyp-s//4+3),3)
+        for cx,cy in ((gxp-3,gyp-s//4),(gxp+3,gyp-s//4),(gxp,gyp-s//4+3)):
+            pygame.draw.circle(screen,(236,110,110),(cx,cy),2)
+        pygame.draw.ellipse(screen,(120,196,110),(gxp-2,gyp-s//2-3,5,3))
+    elif t=="water":  # 水滴
+        pygame.draw.polygon(screen,ink,[(gxp,gyp-s),(gxp+3,gyp-s//2),(gxp-3,gyp-s//2)])
+        pygame.draw.circle(screen,(120,196,236),(gxp,gyp-s//2+1),3)
+        pygame.draw.circle(screen,(110,190,236),(gxp,gyp-s//2+1),2)
+        pygame.draw.circle(screen,(238,250,255),(gxp-1,gyp-s//2),1)
+    elif t=="wood":   # 木段
+        pygame.draw.rect(screen,ink,(gxp-4,gyp-4,9,5),border_radius=2)
+        pygame.draw.rect(screen,(176,132,80),(gxp-3,gyp-3,7,3),border_radius=2)
+        pygame.draw.circle(screen,(140,100,60),(gxp,gyp-2),2)
+        pygame.draw.circle(screen,(176,132,80),(gxp,gyp-2),1)
+    elif t=="stone":  # 矿石
+        pygame.draw.polygon(screen,ink,[(gxp-4,gyp-1),(gxp-2,gyp-4),(gxp+3,gyp-3),(gxp+4,gyp+1),(gxp-1,gyp+2)])
+        pygame.draw.polygon(screen,(150,152,164),[(gxp-4,gyp-1),(gxp-2,gyp-4),(gxp+3,gyp-3),(gxp+4,gyp+1),(gxp-1,gyp+2)])
+        pygame.draw.polygon(screen,(186,188,196),[(gxp-4,gyp-1),(gxp-2,gyp-4),(gxp+1,gyp-3),(gxp-1,gyp+1)])
+    elif t=="herb":   # 草药
+        pygame.draw.line(screen,ink,(gxp,gyp),(gxp,gyp-5),2)
+        for dx in (-2,0,2):
+            pygame.draw.ellipse(screen,(96,200,128),(gxp+dx-2,gyp-7+(abs(dx)),4,3))
+            pygame.draw.ellipse(screen,ink,(gxp+dx-2,gyp-7+(abs(dx)),4,3),1)
+    elif t=="ore":    # 紫晶
+        pygame.draw.polygon(screen,ink,[(gxp-3,gyp),(gxp-1,gyp-5),(gxp+3,gyp-4),(gxp+4,gyp+1),(gxp, gyp+2)])
+        pygame.draw.polygon(screen,(150,110,190),[(gxp-3,gyp),(gxp-1,gyp-5),(gxp+3,gyp-4),(gxp+4,gyp+1),(gxp,gyp+2)])
+        pygame.draw.line(screen,(238,238,255),(gxp-1,gyp-4),(gxp+2,gyp+1),1)
+
+def draw_agent_anim(screen,overlay,a,selected,tick,world,warn_surf):
+    gx,gy=a.pos.x,a.pos.y
+    gxp,gyp=grid_ground(gx,gy)
+    if not a.alive:
+        _draw_shadow(overlay,gxp,gyp,12,4)
+        pygame.draw.rect(screen,(120,124,138),(gxp-6,gyp-9,12,9),border_radius=3)
+        pygame.draw.rect(screen,(150,154,168),(gxp-5,gyp-8,10,7),border_radius=3)
+        pygame.draw.line(screen,(90,92,104),(gxp-3,gyp-8),(gxp+3,gyp-2),2)
+        pygame.draw.line(screen,(90,92,104),(gxp+3,gyp-8),(gxp-3,gyp-2),2)
+        return
+    state=a.state.value
+    cloth=COLORS.get("agent_"+state,COLORS["agent_idle"])
+    hair=GEN_COLORS[a.generation%len(GEN_COLORS)]
+    hx,hy=gxp,gyp-14
+    sidx=(abs(gx)*31+gy)%7
+    bob=int(math.sin(tick*0.09+sidx)*1.2) if state!="working" else 0
+    hy+=bob
+    _draw_shadow(overlay,gxp,gyp,14,5)
+    # 身体（连身衣 + 腿）
+    pygame.draw.rect(screen,PAL["ink"],(hx-6,hy+2,14,11),border_radius=5)
+    pygame.draw.rect(screen,cloth,(hx-5,hy+3,12,9),border_radius=5)
+    pygame.draw.line(screen,_darken(cloth,0.86),(hx-3,hy+10),(hx-4,hy+13),2)
+    pygame.draw.line(screen,_darken(cloth,0.86),(hx+3,hy+10),(hx+4,hy+13),2)
+    pygame.draw.line(screen,_lerp_color(cloth,(255,255,255),0.3),(hx-4,hy+4),(hx+3,hy+4),2)
+    # 头（黑描边 + 肤色 + 发盖）
+    pygame.draw.circle(screen,PAL["ink"],(hx,hy-7),8)
+    pygame.draw.circle(screen,hair,(hx,hy-7),7)
+    pygame.draw.circle(screen,PAL["ink"],(hx,hy-4),6)
+    pygame.draw.circle(screen,PAL["skin"],(hx,hy-4),5)
+    for bx in (-5,-1,4):  # 刘海
+        pygame.draw.line(screen,hair,(hx+bx,hy-10),(hx+bx,hy-6),3)
+    # 表情
+    if state=="resting":
+        for ex in (-2,2):
+            pygame.draw.arc(screen,PAL["ink"],(hx+ex-3,hy-5,6,4),0.15,2.99,2)
+    else:
+        for ex in (-2,2):
+            pygame.draw.ellipse(screen,(255,255,255),(hx+ex-2,hy-5,4,5))
+            pygame.draw.circle(screen,(96,78,72),(hx+ex,hy-3),2)
+            pygame.draw.circle(screen,(30,24,32),(hx+ex,hy-3),1)
+            pygame.draw.circle(screen,(255,255,255),(hx+ex-1,hy-4),1)
+        if state=="working":
+            pygame.draw.circle(screen,(120,196,244),(hx+7,hy-9),2)
+            pygame.draw.circle(screen,(188,236,255),(hx+6,hy-10),1)
+    # 腮红
+    pygame.draw.circle(screen,PAL["blush"],(hx-6,hy-2),2)
+    pygame.draw.circle(screen,PAL["blush"],(hx+6,hy-2),2)
+    # 嘴
+    pygame.draw.arc(screen,PAL["ink"],(hx-2,hy-2,4,3),0.2,2.9,1)
+    # 配偶爱心（浮动）
+    if a.partner_id:
+        p=world.find_agent(a.partner_id)
+        if p and p.alive:
+            by=hy-24+int(math.sin(tick*0.12)*1.5)
+            pygame.draw.circle(screen,(240,110,160),(hx-2,by-1),2)
+            pygame.draw.circle(screen,(240,110,160),(hx+2,by-1),2)
+            pygame.draw.polygon(screen,(240,110,160),[(hx-3,by-1),(hx+3,by-1),(hx,by+2)])
+    # 需求危机气泡
+    if min(a.needs.values())<15:
+        bx,byy=hx+7,hy-19
+        pygame.draw.circle(screen,PAL["ink"],(bx,byy),6)
+        pygame.draw.circle(screen,(238,96,84),(bx,byy),5)
+        screen.blit(warn_surf,(bx-3,byy-5))
+    # 选中框
+    if selected and a.aid==selected.aid:
+        _rounded(screen,(hx-12,hy-22,24,38),(255,238,120),radius=8,outline=(120,100,30),ow=1)
+        _rounded(screen,(hx-11,hy-21,22,36),(255,238,120),radius=8,outline=(255,238,120),ow=2)
 
 def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None):
     import pygame
     from collections import deque
     pygame.init()
     screen=pygame.display.set_mode((WW,WH))
-    pygame.display.set_caption("Second Reality v2.0 - Virtual World  (seed=%d)"%seed)
+    pygame.display.set_caption("Second Reality v2.0 - Anime World (seed=%d)"%seed)
     import os
     def _load_font(size,bold=False):
-        """优先按文件路径加载含 CJK 字形的字体；SysFont 不可靠（会把中文渲染成方块）"""
         for p in CJK_FONT_FILES:
             if os.path.exists(p):
                 try:
@@ -676,23 +948,25 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None):
         try: return pygame.font.SysFont("microsoftyahei,simhei,notosanscjk,arial",size,bold=bold)
         except Exception: return pygame.font.Font(None,size+2)
     font=_load_font(12); font_b=_load_font(13,True); font_s=_load_font(10)
+    font_t=_load_font(16,True)
     clock=pygame.time.Clock()
     config=WorldConfig(world_size=WORLD_SIZE,initial_agents=30,initial_resources=80,initial_buildings=8,seed=seed)
     world=NohnWorld(config)
     running=True; paused=False; speed=tps; selected=None; show_help=False
-    # 视觉开关（默认全开；现场可按键逐层关闭，不被特效淹没）
     show_heat=True; show_graph=True; show_eventfx=True; show_daynight=True
-    # 半透明叠加层：pygame 在普通 Surface 上会忽略 4 元组颜色的 alpha，必须走 SRCALPHA 图层
-    overlay=pygame.Surface((WORLD_SIZE*CELL,WORLD_SIZE*CELL),pygame.SRCALPHA)
-    warn_surf=font_b.render("!",True,(255,90,90))
-    fx=[]                      # 网格浮字
-    feed=deque(maxlen=8)       # 右侧事件流
+    sky_surf=build_sky(seed)
+    ground_surf=build_ground(seed)
+    shadow_surf=build_island_shadow()
+    overlay=pygame.Surface((MAP_W,MAP_H),pygame.SRCALPHA)
+    warn_surf=font_b.render("!",True,(255,255,255))
+    fx=[]; feed=deque(maxlen=8)
     hist={"pop":deque(maxlen=240),"gini":deque(maxlen=240),
           "need":deque(maxlen=240),"money":deque(maxlen=240)}
     last_wb=world._wb
 
     def spawn_fx(gx,gy,txt,col,ttl=28):
-        fx.append({"x":gx*CELL+CELL//2,"y":gy*CELL+CELL//2,"t":txt,"c":col,"ttl":ttl,"age":0})
+        cx,cy=tile_center(gx,gy)
+        fx.append({"x":cx,"y":cy,"t":txt,"c":col,"ttl":ttl,"age":0})
         if len(fx)>70: del fx[0]
 
     def note_events(evts):
@@ -706,254 +980,253 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None):
                 if a:
                     txt={"marriage":"+","death":"x","trade":"$","violation":"!"}[v]
                     spawn_fx(a.pos.x,a.pos.y,txt,EVENT_COLOR.get(v,(200,200,200)))
-        if world._wb>last_wb:   # 出生事件写入 event_log 而非 tick 返回值，故以新生人口数增量探测
+        if world._wb>last_wb:
             for a in world.agents[-(world._wb-last_wb):]:
                 if show_eventfx: spawn_fx(a.pos.x,a.pos.y,"*",EVENT_COLOR["birth"],36)
                 feed.append("t%-5d %-4s %s (gen%d)"%(world._tick,EVENT_LABEL["birth"],a.aid,a.generation))
             last_wb=world._wb
 
-    def draw_building(b):
-        bx,by=b["pos"]; t=b["type"]; c=COLORS.get(t,(128,128,128))
-        r=pygame.Rect(bx*CELL+1,by*CELL+1,CELL-2,CELL-2)
-        pygame.draw.rect(screen,c,r)
-        pygame.draw.rect(screen,(0,0,0),r,1)
-        cx,cy=r.center
-        if t=="house":   # 屋顶
-            pygame.draw.polygon(screen,(90,60,40),[(r.left,cy),(cx,r.top+1),(r.right,cy)])
-        elif t=="market":  pygame.draw.circle(screen,(255,240,180),(cx,cy),2)
-        elif t=="workshop":
-            pygame.draw.line(screen,(60,40,20),(r.left+2,r.bottom-2),(r.right-2,r.top+2),1)
-            pygame.draw.line(screen,(60,40,20),(r.left+2,r.top+2),(r.right-2,r.bottom-2),1)
-        elif t=="garden":
-            pygame.draw.circle(screen,(240,120,160),(cx-2,cy),1); pygame.draw.circle(screen,(240,120,160),(cx+2,cy),1)
-        elif t=="library":
-            for i in range(3): pygame.draw.line(screen,(60,50,120),(r.left+2+i*3,cy-2),(r.left+2+i*3,cy+2),2)
-
-    def draw_heatmap():
-        """财富热力：把每个 agent 的财富按对数归一化成底色，叠在网格之下"""
+    def draw_heat_glow():
+        """财富热力 → 角色脚下的暖光晕（动漫风格化）"""
+        if not show_heat: return
         denom=math.log1p(1200.0)
         for a in world.agents:
             if not a.alive: continue
             n=math.log1p(max(0.0,a.wealth))/denom
             if n<=0.02: continue
-            pygame.draw.rect(screen,_lerp_color(COLORS["bg"],COLORS["warm"],n),
-                (a.pos.x*CELL,a.pos.y*CELL,CELL,CELL))
+            gxp,gyp=grid_ground(a.pos.x,a.pos.y)
+            col=(255,196,110) if n<0.5 else (255,150,70)
+            for rr,al in ((13,22),(9,36),(6,54)):
+                pygame.draw.circle(overlay,col+(al,),(gxp,gyp-4),rr)
 
     def draw_world():
-        pygame.draw.rect(screen,COLORS["bg"],(0,0,WORLD_SIZE*CELL,WORLD_SIZE*CELL))
-        if show_heat: draw_heatmap()
-        for x in range(0,WORLD_SIZE*CELL+1,CELL):
-            pygame.draw.line(screen,COLORS["grid"],(x,0),(x,WORLD_SIZE*CELL))
-        for y in range(0,WORLD_SIZE*CELL+1,CELL):
-            pygame.draw.line(screen,COLORS["grid"],(0,y),(WORLD_SIZE*CELL,y))
-        for r in world.resources:
-            if r["amount"]<=0: continue
-            rx,ry=r["pos"]; c=COLORS.get(r["type"],(128,128,128))
-            # 资源用方形、agent 用圆形：形状即区分（否则"休息"与"水"同为蓝色圆点，无法辨识）
-            s=max(2,min(CELL//2-1,int(r["amount"]//3)))
-            rect=pygame.Rect(rx*CELL+CELL//2-s,ry*CELL+CELL//2-s,s*2,s*2)
-            pygame.draw.rect(screen,c,rect)
-            pygame.draw.rect(screen,(0,0,0),rect,1)
-        for b in world.buildings: draw_building(b)
-        # 关系线走半透明层（普通 Surface 会丢弃 alpha，导致连线过实、盖住 agent）
+        screen.blit(sky_surf,(0,0))
+        screen.blit(shadow_surf,(0,0))
+        screen.blit(ground_surf,(0,0))
         overlay.fill((0,0,0,0))
+        draw_heat_glow()
+        # 关系线（半透明层）
         for a in world.agents:
             if not a.alive: continue
-            ax,ay=a.pos.x*CELL+CELL//2,a.pos.y*CELL+CELL//2
+            ax,ay=grid_ground(a.pos.x,a.pos.y)
             if a.partner_id:
                 p=world.find_agent(a.partner_id)
                 if p and p.alive:
-                    pygame.draw.line(overlay,COLORS["partner"]+(110,),(ax,ay),
-                        (p.pos.x*CELL+CELL//2,p.pos.y*CELL+CELL//2),1)
+                    px,py=grid_ground(p.pos.x,p.pos.y)
+                    pygame.draw.line(overlay,COLORS["partner"]+(120,),(ax,ay),(px,py),2)
             if show_graph:
                 for fid in a.friends:
-                    if fid<=a.aid: continue          # 每对只画一次
+                    if fid<=a.aid: continue
                     f=world.find_agent(fid)
                     if f and f.alive:
-                        pygame.draw.line(overlay,COLORS["friend"]+(48,),(ax,ay),
-                            (f.pos.x*CELL+CELL//2,f.pos.y*CELL+CELL//2),1)
-        if show_daynight:                            # 昼夜/季节色调：压低强度，仅作氛围
-            ph=(world._tick%240)/240.0
-            tint=_lerp_color((20,30,80),(90,60,10),abs(math.sin(ph*math.pi)))
-            overlay.fill(tint+(16,))
-        screen.blit(overlay,(0,0))
+                        fx2,fy2=grid_ground(f.pos.x,f.pos.y)
+                        pygame.draw.line(overlay,COLORS["friend"]+(54,),(ax,ay),(fx2,fy2),2)
+        # 地面阴影（建筑/资源/角色）
+        for b in world.buildings:
+            gxp,gyp=grid_ground(b["pos"][0],b["pos"][1])
+            _draw_shadow(overlay,gxp,gyp,30,8)
+        for r in world.resources:
+            if r["amount"]<=0: continue
+            gxp,gyp=grid_ground(r["pos"][0],r["pos"][1])
+            _draw_shadow(overlay,gxp,gyp,12,4)
         for a in world.agents:
-            cx,cy=a.pos.x*CELL+CELL//2,a.pos.y*CELL+CELL//2
-            if not a.alive:
-                pygame.draw.line(screen,COLORS["agent_dead"],(cx-3,cy-3),(cx+3,cy+3),1)
-                pygame.draw.line(screen,COLORS["agent_dead"],(cx-3,cy+3),(cx+3,cy-3),1)
-                continue
-            c=COLORS.get("agent_"+a.state.value,COLORS["agent_idle"])
-            pygame.draw.circle(screen,c,(cx,cy),CELL//2-1)
-            pygame.draw.circle(screen,GEN_COLORS[a.generation%len(GEN_COLORS)],(cx,cy),CELL//2-1,1)
-            if min(a.needs.values())<15: screen.blit(warn_surf,(cx+3,cy-9))   # 需求危机警示
-            if selected and a.aid==selected.aid:
-                pygame.draw.circle(screen,(255,255,100),(cx,cy),CELL//2+2,2)
+            gxp,gyp=grid_ground(a.pos.x,a.pos.y)
+            _draw_shadow(overlay,gxp,gyp,14,5)
+        # 昼夜/季节色调
+        if show_daynight:
+            ph=(world._tick%240)/240.0
+            tint=_lerp_color((15,25,65),(75,50,10),abs(math.sin(ph*math.pi)))
+            overlay.fill(tint+(18,))
+        screen.blit(overlay,(0,0))
+        # 实体按深度排序（画家算法：近的晚画）
+        ents=[]
+        for b in world.buildings:
+            ents.append((b["pos"][0]+b["pos"][1],0,("b",b)))
+        for r in world.resources:
+            if r["amount"]<=0: continue
+            ents.append((r["pos"][0]+r["pos"][1],1,("r",r)))
+        for a in world.agents:
+            ents.append((a.pos.x+a.pos.y,2,("a",a)))
+        ents.sort(key=lambda e:(e[0],e[1]))
+        for _,_,(kind,obj) in ents:
+            if kind=="b": draw_building_anim(screen,overlay,obj,world._tick)
+            elif kind=="r": draw_resource_anim(screen,overlay,obj)
+            else: draw_agent_anim(screen,overlay,obj,selected,world._tick,world,warn_surf)
+        # 事件浮字（带描边）
         for f in fx:
             rise=int(f["age"]*0.4)
+            for oxx,oyy in ((1,0),(-1,0),(0,1),(0,-1)):
+                screen.blit(font_b.render(f["t"],True,PAL["ink"]),(f["x"]-4+oxx,f["y"]-rise+oyy))
             screen.blit(font_b.render(f["t"],True,f["c"]),(f["x"]-4,f["y"]-rise))
 
-    def draw_need_bar(x,y,val,w=150,h=8):
-        pygame.draw.rect(screen,COLORS["bar_bg"],(x,y,w,h))
+    def draw_need_bar(x,y,val,w=150,h=10):
+        _rounded(screen,(x-1,y-1,w+2,h+2),PAL["ink"],radius=int(h/2)+2)
+        _rounded(screen,(x,y,w,h),(44,48,70),radius=int(h/2))
         bc=COLORS["need_high"] if val>60 else (COLORS["need_mid"] if val>30 else COLORS["need_low"])
-        pygame.draw.rect(screen,bc,(x,y,int(w*val/100),h))
+        bw=int(w*min(1.0,val/100))
+        if bw>2:
+            _rounded(screen,(x,y,bw,h),bc,radius=int(h/2))
+            _rounded(screen,(x,y,bw,int(h*0.42)),_lerp_color(bc,(255,255,255),0.45),radius=int(h/2))
 
     def draw_chart(x,y,w,h,series):
-        """迷你折线：每条序列按自身最大值归一化，只看走势形状（数值由上方图例给出）"""
-        pygame.draw.rect(screen,COLORS["chart_bg"],(x,y,w,h))
-        pygame.draw.rect(screen,COLORS["chart_line"],(x,y,w,h),1)
+        _rounded(screen,(x,y,w,h),COLORS["chart_bg"],radius=8,outline=(52,56,82),ow=1)
         for dq,col,lab in series:
             if len(dq)<2: continue
             mx=max(max(dq),1e-9); n=len(dq)
-            pts=[(x+1+int((w-2)*i/max(1,n-1)),y+h-2-int((h-6)*min(1.0,v/mx))) for i,v in enumerate(dq)]
-            pygame.draw.lines(screen,col,False,pts,1)
+            pts=[(x+3+int((w-6)*i/max(1,n-1)),y+h-3-int((h-8)*min(1.0,v/mx))) for i,v in enumerate(dq)]
+            pygame.draw.lines(screen,(20,22,40),False,pts,4)
+            pygame.draw.lines(screen,col,False,pts,2)
+            if pts:
+                pygame.draw.circle(screen,col,pts[-1],3)
+                pygame.draw.circle(screen,(255,255,255),pts[-1],3,1)
 
     def draw_chart_legend(x,y,items):
-        """图例画在图表框之外，避免文字压在曲线上"""
         for k,(dq,col,lab) in enumerate(items):
-            screen.blit(font_s.render("%s %.2f"%(lab,dq[-1] if dq else 0.0),True,col),(x+k*92,y))
+            pygame.draw.circle(screen,col,(x+5+k*92,y+4),3)
+            screen.blit(font_s.render("%s %.2f"%(lab,dq[-1] if dq else 0.0),True,col),(x+12+k*92,y))
 
     def draw_legend(x0,y0):
-        """图例：填在世界下方的空白区，让画面自解释（投资方不必问"这个颜色是什么意思"）"""
-        screen.blit(font_b.render("图例",True,(180,220,255)),(x0,y0))
+        screen.blit(font_b.render("图例",True,(140,190,240)),(x0,y0))
         c1=x0; c2=x0+190; c3=x0+390
         def dot(x,y,col):
-            pygame.draw.circle(screen,col,(x+5,y+5),4)
-            pygame.draw.circle(screen,(0,0,0),(x+5,y+5),4,1)
-        def head(x,y,t): screen.blit(font_s.render(t,True,(150,180,220)),(x,y))
-        y=y0+18; head(c1,y,"agent 状态"); y+=13
+            pygame.draw.circle(screen,col,(x+4,y+5),4)
+            pygame.draw.circle(screen,PAL["ink"],(x+4,y+5),4,1)
+        def head(x,y,t): screen.blit(font_s.render(t,True,(140,175,215)),(x,y))
+        y=y0+16; head(c1,y,"agent 状态"); y+=12
         for st,lab in STATE_LABELS.items():
             dot(c1,y,COLORS.get("agent_"+st,COLORS["agent_idle"]))
-            screen.blit(font_s.render(lab,True,COLORS["text"]),(c1+14,y)); y+=11
-        y+=4; head(c1,y,"圆环=代际"); y+=13
+            screen.blit(font_s.render(lab,True,COLORS["text"]),(c1+12,y)); y+=10
+        y+=3; head(c1,y,"发色=代际"); y+=12
         for g in range(4):
-            pygame.draw.circle(screen,GEN_COLORS[g],(c1+5,y+5),4,2)
-            screen.blit(font_s.render("gen%d"%g,True,COLORS["text"]),(c1+14,y)); y+=11
-        y=y0+18; head(c2,y,"资源（方形）  agent（圆形）"); y+=13
+            pygame.draw.circle(screen,GEN_COLORS[g],(c1+4,y+5),4)
+            screen.blit(font_s.render("gen%d"%g,True,COLORS["text"]),(c1+12,y)); y+=10
+        y=y0+16; head(c2,y,"资源（小图标）"); y+=12
         for rt,lab in RES_LABELS.items():
-            r=pygame.Rect(c2+1,y+1,9,9); pygame.draw.rect(screen,COLORS.get(rt,(128,128,128)),r)
-            pygame.draw.rect(screen,(0,0,0),r,1)
-            screen.blit(font_s.render(lab,True,COLORS["text"]),(c2+14,y)); y+=11
-        y+=4
-        r=pygame.Rect(c2+1,y+1,10,10)
-        pygame.draw.rect(screen,COLORS["warm"],r); pygame.draw.rect(screen,(0,0,0),r,1)
-        screen.blit(font_s.render("财富热力底图",True,COLORS["text"]),(c2+16,y))
-        y=y0+18; head(c3,y,"建筑"); y+=13
+            pygame.draw.circle(screen,COLORS.get(rt,(128,128,128)),(c2+4,y+5),4)
+            pygame.draw.circle(screen,(0,0,0),(c2+4,y+5),4,1)
+            screen.blit(font_s.render(lab,True,COLORS["text"]),(c2+12,y)); y+=10
+        y+=3
+        pygame.draw.circle(screen,COLORS["warm"],(c2+4,y+5),4)
+        screen.blit(font_s.render("财富热力光圈",True,COLORS["text"]),(c2+12,y))
+        y=y0+16; head(c3,y,"建筑"); y+=12
         for bt,lab in BLD_LABELS.items():
-            r=pygame.Rect(c3,y+1,9,9); pygame.draw.rect(screen,COLORS.get(bt,(128,128,128)),r)
-            pygame.draw.rect(screen,(0,0,0),r,1)
-            screen.blit(font_s.render(lab,True,COLORS["text"]),(c3+14,y)); y+=11
-        y+=4; head(c3,y,"事件标记"); y+=13
-        for txt,col,lab in [("*",EVENT_COLOR["birth"],"出生"),("+",EVENT_COLOR["marriage"],"结婚"),
-                            ("$",EVENT_COLOR["trade"],"交易"),("x",EVENT_COLOR["death"],"死亡"),
-                            ("!",(255,90,90),"需求<15")]:
+            pygame.draw.rect(screen,COLORS.get(bt,(128,128,128)),(c3,y+2,8,8),border_radius=2)
+            pygame.draw.rect(screen,(0,0,0),(c3,y+2,8,8),1,border_radius=2)
+            screen.blit(font_s.render(lab,True,COLORS["text"]),(c3+12,y)); y+=10
+        y+=3; head(c3,y,"事件标记"); y+=12
+        for txt,col in [("*",EVENT_COLOR["birth"]),("+",EVENT_COLOR["marriage"]),
+                        ("$",EVENT_COLOR["trade"]),("x",EVENT_COLOR["death"]),
+                        ("!",(255,90,90))]:
             screen.blit(font_b.render(txt,True,col),(c3,y))
-            screen.blit(font_s.render(lab,True,COLORS["text"]),(c3+14,y)); y+=11
+            screen.blit(font_s.render({"*":"出生","+":"结婚","$":"交易","x":"死亡","!":"危机"}[txt],True,COLORS["text"]),(c3+12,y)); y+=10
 
     def draw_tooltip():
         mx,my=pygame.mouse.get_pos()
-        if mx>=WORLD_SIZE*CELL or my>=WORLD_SIZE*CELL: return
-        gx,gy=mx//CELL,my//CELL
+        if mx>=MAP_W or my>=MAP_H: return
+        g=screen_to_grid(mx,my)
+        if not g: return
+        gx,gy=g
         for a in world.agents:
             if a.alive and a.pos.x==gx and a.pos.y==gy:
                 lines=["%s (%s) gen%d"%(a.name,a.aid,a.generation),
                        "%s  age %d"%(a.state.value,a.age),
                        "wealth %.0f  energy %.0f"%(a.wealth,a.energy),
                        "mem %d  friends %d"%(a.memory.stats()["total_memories"],len(a.friends))]
-                tw=max(font_s.size(t)[0] for t in lines)+12
-                th=len(lines)*11+10
+                tw=max(font_s.size(t)[0] for t in lines)+18
+                th=len(lines)*11+16
                 tx=min(mx+12,WW-tw-4); ty=min(my+12,WH-th-4)
-                box=pygame.Surface((tw,th),pygame.SRCALPHA)
-                box.fill(COLORS["tip_bg"]+(225,))
-                pygame.draw.rect(box,COLORS["tip_border"],(0,0,tw,th),1)
-                screen.blit(box,(tx,ty))
+                _rounded(screen,(tx,ty,tw,th),(16,18,30),radius=8,outline=(110,120,150),ow=1,alpha=235)
+                pygame.draw.rect(screen,(245,200,90),(tx+6,ty+4,2,th-8),border_radius=1)
                 for i,t in enumerate(lines):
-                    screen.blit(font_s.render(t,True,COLORS["text"]),(tx+6,ty+5+i*11))
+                    screen.blit(font_s.render(t,True,COLORS["text"]),(tx+14,ty+7+i*11))
                 return
 
     def draw_stats():
-        px=WORLD_SIZE*CELL; pw=WW-px
-        pygame.draw.rect(screen,COLORS["panel"],(px,0,pw,WH))
-        pygame.draw.line(screen,(60,60,80),(px,0),(px,WH),2)
-        y=8
+        px=MAP_W; pw=PANEL_W
+        pygame.draw.rect(screen,PAL["panel"],(px,0,pw,WH))
+        pygame.draw.rect(screen,PAL["panel_2"],(px,0,4,WH))
+        pygame.draw.rect(screen,PAL["gold"],(px+0,0,4,WH))
+        y=10
+        _rounded(screen,(px+8,y,pw-16,30),(36,40,66),radius=9,outline=(90,96,130),ow=1)
+        screen.blit(font_t.render("Second Reality",True,PAL["gold"]),(px+18,y+6))
+        screen.blit(font_s.render("世界观控制台 · Anime 2.5D",True,(140,170,215)),(px+150,y+11))
+        y+=40
+        screen.blit(font.render("Tick %d · %s · seed=%d"%(world._tick,"[暂停]" if paused else "%d tps"%speed,seed),True,PAL["text_dim"]),(px+10,y)); y+=17
         s=world.get_stats()
-        screen.blit(font_b.render("Second Reality v2.0",True,(255,220,100)),(px+10,y)); y+=20
-        st="Tick: %d  %s  seed=%d"%(world._tick,"[PAUSED]" if paused else "[%d tps]"%speed,seed)
-        screen.blit(font.render(st,True,COLORS["text"]),(px+10,y)); y+=18
-        screen.blit(font.render("Pop: %d alive / %d dead  B:%d D:%d"%(s["alive"],s["dead"],s["births"],s["deaths"]),True,COLORS["text"]),(px+10,y)); y+=16
-        screen.blit(font.render("Wealth: %.0f total / %.1f avg"%(s["total_wealth"],s["avg_wealth"]),True,COLORS["text"]),(px+10,y)); y+=14
-        screen.blit(font.render("Money: %.0f  Infl: %.4f  Viol: %d"%(s["money_supply"],s["inflation_rate"],s["violations"]),True,COLORS["text"]),(px+10,y)); y+=14
-        screen.blit(font.render("Trades: %d  Created: %.0f  Mem: %d"%(s["total_trades"],s["wealth_created"],s["total_memory"]),True,COLORS["text"]),(px+10,y)); y+=14
-        screen.blit(font.render("Know: %.1f  Creat: %.1f  Bldg: %d"%(s["avg_knowledge"],s["avg_creativity"],s["buildings"]),True,COLORS["text"]),(px+10,y)); y+=20
-        screen.blit(font_b.render("五层需求 (均值)",True,(180,220,255)),(px+10,y)); y+=18
+        def chip(x,cy,lab,val,accent):
+            w=82
+            _rounded(screen,(x,cy,w,22),(30,34,56),radius=6)
+            screen.blit(font_s.render(lab,True,(130,150,185)),(x+6,cy+3))
+            vtxt=font_b.render(str(val),True,accent)
+            screen.blit(vtxt,(x+w-6-vtxt.get_width(),cy+2))
+        chip(px+10,y,"人口",s["alive"],(120,230,255)); chip(px+100,y,"死亡",s["dead"],(200,140,140))
+        y+=28
+        chip(px+10,y,"出生",s["births"],(140,255,190)); chip(px+100,y,"违规",s["violations"],(255,150,120))
+        y+=32
+        screen.blit(font.render("财富: %.0f 总 / %.1f 均"%(s["total_wealth"],s["avg_wealth"]),True,PAL["text"]),(px+10,y)); y+=15
+        screen.blit(font.render("货币: %.0f  通胀: %.4f"%(s["money_supply"],s["inflation_rate"]),True,PAL["text"]),(px+10,y)); y+=15
+        screen.blit(font.render("交易: %d  创造: %.0f"%(s["total_trades"],s["wealth_created"]),True,PAL["text"]),(px+10,y)); y+=15
+        screen.blit(font.render("知识: %.1f  创造: %.1f"%(s["avg_knowledge"],s["avg_creativity"]),True,PAL["text"]),(px+10,y)); y+=18
+        _rounded(screen,(px+8,y,pw-16,96),(24,27,46),radius=8,outline=(60,66,96),ow=1)
+        screen.blit(font_b.render("五层需求（均值）",True,(140,190,240)),(px+16,y+5)); y+=22
         for i,n in enumerate(FIVE_LAYER_NEEDS):
-            screen.blit(font_s.render(NEED_LABELS_CN[i],True,COLORS["text"]),(px+10,y))
-            draw_need_bar(px+50,y,s["avg_needs"][n],pw-75); y+=14
+            screen.blit(font_s.render(NEED_LABELS_CN[i],True,PAL["text"]),(px+16,y))
+            draw_need_bar(px+52,y,s["avg_needs"][n],pw-78); y+=13
         y+=6
-        screen.blit(font_b.render("实时曲线（各自归一化）",True,(180,220,255)),(px+10,y)); y+=15
+        screen.blit(font_b.render("实时曲线（各自归一化）",True,(140,190,240)),(px+10,y)); y+=14
         draw_chart_legend(px+10,y,[(hist["pop"],COLORS["curve_pop"],"人口"),
             (hist["gini"],COLORS["curve_gini"],"基尼")]); y+=13
-        draw_chart(px+10,y,pw-20,58,[(hist["pop"],COLORS["curve_pop"],"人口"),
-            (hist["gini"],COLORS["curve_gini"],"基尼")]); y+=62
+        draw_chart(px+10,y,pw-20,56,[(hist["pop"],COLORS["curve_pop"],"人口"),
+            (hist["gini"],COLORS["curve_gini"],"基尼")]); y+=60
         draw_chart_legend(px+10,y,[(hist["need"],COLORS["curve_need"],"需求"),
             (hist["money"],COLORS["curve_money"],"货币")]); y+=13
-        draw_chart(px+10,y,pw-20,58,[(hist["need"],COLORS["curve_need"],"需求"),
-            (hist["money"],COLORS["curve_money"],"货币")]); y+=62
-        screen.blit(font_b.render("事件流",True,(180,220,255)),(px+10,y)); y+=15
+        draw_chart(px+10,y,pw-20,56,[(hist["need"],COLORS["curve_need"],"需求"),
+            (hist["money"],COLORS["curve_money"],"货币")]); y+=60
+        _rounded(screen,(px+8,y,pw-16,14+6*10),(24,27,46),radius=8,outline=(60,66,96),ow=1)
+        screen.blit(font_b.render("事件流",True,(140,190,240)),(px+16,y+4)); y+=16
         for line in list(feed)[-6:]:
-            screen.blit(font_s.render(line[:34],True,(170,180,200)),(px+10,y)); y+=11
+            screen.blit(font_s.render(line[:34],True,(150,168,200)),(px+16,y)); y+=10
         y+=6
         if selected:
             a=selected
+            _rounded(screen,(px+8,y,pw-16,26),(40,36,60),radius=8,outline=(120,110,80),ow=1)
             if not a.alive:
-                screen.blit(font.render("[已故] %s (%s)"%(a.name,a.aid),True,COLORS["agent_dead"]),(px+10,y)); y+=16
+                screen.blit(font_b.render("[已故] %s (%s)"%(a.name,a.aid),True,COLORS["agent_dead"]),(px+16,y+6)); y+=26
             else:
-                screen.blit(font_b.render("%s (%s) gen%d"%(a.name,a.aid,a.generation),True,(255,255,150)),(px+10,y)); y+=16
-                screen.blit(font.render("State: %s  Age: %d  Wealth: %.0f"%(a.state.value,a.age,a.wealth),True,COLORS["text"]),(px+10,y)); y+=14
-                screen.blit(font.render("Energy: %.0f  Rep: %.0f  Know: %.1f"%(a.energy,a.reputation,a.knowledge),True,COLORS["text"]),(px+10,y)); y+=14
+                screen.blit(font_b.render("%s (%s) gen%d"%(a.name,a.aid,a.generation),True,(255,238,150)),(px+16,y+6)); y+=26
+                screen.blit(font.render("状态: %s  年龄: %d"%(a.state.value,a.age),True,PAL["text"]),(px+10,y)); y+=14
+                screen.blit(font.render("财富: %.0f  精力: %.0f"%(a.wealth,a.energy),True,PAL["text"]),(px+10,y)); y+=14
+                screen.blit(font.render("声望: %.0f  知识: %.1f"%(a.reputation,a.knowledge),True,PAL["text"]),(px+10,y)); y+=14
                 ms=a.memory.stats()
-                screen.blit(font.render("Mem: %d (S:%d L:%d)  Creat: %.1f"%(ms["total_memories"],ms["stm_count"],ms["ltm_count"],a.creativity),True,COLORS["text"]),(px+10,y)); y+=14
+                screen.blit(font.render("记忆: %d (S:%d L:%d) 创造: %.1f"%(ms["total_memories"],ms["stm_count"],ms["ltm_count"],a.creativity),True,PAL["text"]),(px+10,y)); y+=14
                 for i,n in enumerate(FIVE_LAYER_NEEDS):
-                    screen.blit(font_s.render(NEED_LABELS_CN[i],True,COLORS["text"]),(px+10,y))
-                    draw_need_bar(px+50,y,a.needs[n],pw-75,h=7); y+=11
+                    screen.blit(font_s.render(NEED_LABELS_CN[i],True,PAL["text"]),(px+10,y))
+                    draw_need_bar(px+50,y,a.needs[n],pw-78,h=7); y+=11
                 y+=4
-                inv_str=str(dict(a.inventory)) if a.inventory else "none"
-                screen.blit(font_s.render("Items: "+inv_str,True,COLORS["text"]),(px+10,y)); y+=12
+                inv_str=str(dict(a.inventory)) if a.inventory else "无"
+                screen.blit(font_s.render("物品: "+inv_str,True,PAL["text_dim"]),(px+10,y)); y+=13
                 if a.partner_id:
                     p=world.find_agent(a.partner_id); pn=p.name if p else "?"
-                    screen.blit(font_s.render("配偶: %s  好友: %d  子女: %d"%(pn,len(a.friends),len(a.children_ids)),True,COLORS["text"]),(px+10,y)); y+=12
+                    screen.blit(font_s.render("配偶: %s  好友: %d  子女: %d"%(pn,len(a.friends),len(a.children_ids)),True,PAL["text"]),(px+10,y)); y+=13
                 recent=a.memory.recall(k=3)
                 if recent:
-                    screen.blit(font_s.render("最近记忆:",True,(180,200,255)),(px+10,y)); y+=11
+                    screen.blit(font_s.render("最近记忆:",True,(150,190,250)),(px+10,y)); y+=11
                     for m in recent[:3]:
-                        screen.blit(font_s.render("  "+m.content[:25],True,(160,180,200)),(px+10,y)); y+=10
-        hy=WORLD_SIZE*CELL+5
+                        screen.blit(font_s.render("  "+m.content[:25],True,(140,162,196)),(px+10,y)); y+=10
+        hy=MAP_H+5
         screen.blit(font_s.render(
-            "SPACE暂停 | +/- 速度 | 点击选中 | P截图 S存档 R重置 H帮助 | 视觉开关已开: %s"%
+            "SPACE暂停 | +/- 速度 | 点击选中 | P截图 S存档 R重置 H帮助 | 视觉: %s"%
             ("".join(k for k,v in [("W",show_heat),("F",show_graph),("E",show_eventfx),("N",show_daynight)] if v) or "无"),
             True,(150,150,170)),(10,hy))
-        draw_legend(10,hy+20)
-        if show_help:
-            lines=["=== Second Reality v2.0 帮助 ===",
-                "需求层级: 生理 > 安全 > 归属 > 尊重 > 自我实现",
-                "行为: 休息/工作/社交/交易/学习/创造；已婚育龄者会主动与配偶会合",
-                "经济: UBI/10t  税/30t  通胀/50t  债务下限  财富硬顶  劳动铸币(记账)",
-                "记忆: STM->LTM 巩固 + 衰减；采集点写入记忆用于导航(无上帝视角)",
-                "确定性: 同 seed + 同 config => 世界状态逐字节可复现 (--verify-determinism)",
-                "视觉开关: W=财富热力  F=关系网  E=事件特效  N=昼夜色调  P=截图(存当前帧 PNG)",
-                "面板: 热力底图 / 实时曲线(人口·基尼·需求·货币) / 事件流 / 鼠标悬停即看详情"]
-            hh=len(lines)*15+12; hw=max(font.size(t)[0] for t in lines)+16
-            box=pygame.Surface((hw,hh),pygame.SRCALPHA); box.fill((12,12,20,240))
-            pygame.draw.rect(box,(120,120,150),(0,0,hw,hh),1)
-            screen.blit(box,(8,hy+18))
-            for i,line in enumerate(lines):
-                screen.blit(font.render(line,True,(200,200,150)),(16,hy+24+i*15))
+        draw_legend(10,hy+18)
 
     def handle_click(pos):
         nonlocal selected
         mx,my=pos
-        if mx<WORLD_SIZE*CELL and my<WORLD_SIZE*CELL:
-            gx,gy=mx//CELL,my//CELL
+        if mx<MAP_W and my<MAP_H:
+            g=screen_to_grid(mx,my)
+            if not g: return
+            gx,gy=g
             for a in world.agents:
                 if a.alive and a.pos.x==gx and a.pos.y==gy:
                     selected=a; return
@@ -967,11 +1240,10 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None):
         hist["money"].append(s["money_supply"])
 
     if screenshot:
-        # 静默推演 N tick 后渲染一帧存图（无需显示器，配合 SDL_VIDEODRIVER=dummy）
         for _ in range(max_ticks or 600):
             note_events(world.tick()); sample_history()
         for _ in range(8): sample_history()
-        del fx[:-8]   # 交互模式下由 ttl 自然衰减；静默推演时需手动裁剪，否则标记会全部叠在世界里
+        del fx[:-8]
         draw_world(); draw_stats(); pygame.display.flip()
         pygame.image.save(screen,screenshot)
         print("Screenshot saved: %s (tick=%d)"%(screenshot,world._tick))
@@ -993,7 +1265,7 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None):
                 elif ev.key==pygame.K_p:
                     shot="second_reality_%06d.png"%world._tick
                     pygame.image.save(screen,shot); print("Screenshot saved: "+shot)
-                elif ev.key==pygame.K_r: world=NohnWorld(config); selected=None; fx.clear(); feed.clear()  # 同 seed 重置 => 完全相同的世界
+                elif ev.key==pygame.K_r: world=NohnWorld(config); selected=None; fx.clear(); feed.clear()
             elif ev.type==pygame.MOUSEBUTTONDOWN and ev.button==1: handle_click(ev.pos)
         if not paused:
             note_events(world.tick()); sample_history()
@@ -1050,7 +1322,7 @@ if __name__=="__main__":
     import argparse, sys, os
     try: sys.stdout.reconfigure(encoding="utf-8")   # Windows 控制台默认 GBK，会把中文输出打成乱码
     except Exception: pass
-    ap=argparse.ArgumentParser(description="Second Reality v2.0 - Virtual World Model")
+    ap=argparse.ArgumentParser(description="Second Reality v2.0 - Virtual World Model (Anime 2.5D)")
     ap.add_argument("--headless",action="store_true",help="run without GUI")
     ap.add_argument("--ticks",type=int,default=1000,help="ticks to simulate (headless / determinism / screenshot)")
     ap.add_argument("--seed",type=int,default=0,help="world RNG seed; same seed + same config => reproducible")
