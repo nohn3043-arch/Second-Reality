@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/banner.png" alt="SPL-Virtual-World-Base banner" width="100%" />
+  <img src="assets/banner.png" alt="Second Reality Distributed System banner" width="100%" />
 </div>
 
 <p align="center">
@@ -26,7 +26,7 @@
 ## ✦ About
 
 <p style="font-size: 16px; line-height: 1.9; color: #2F2F2F; margin: 0 0 24px;">
-  <strong>SPL-VIRTUAL-WORLD-BASE</strong> is a runnable infrastructure base for virtual worlds and the metaverse, organized as a "Constitution — Law — Bridge" stack with a real implementation layer (<code>system/</code>) underneath. It delivers:
+  <strong>SECOND REALITY DISTRIBUTED SYSTEM</strong> is a runnable infrastructure base for virtual worlds and the metaverse, organized as a "Constitution — Law — Bridge" stack with a real implementation layer (<code>system/</code>) underneath. It delivers:
 </p>
 
 <ul>
@@ -37,7 +37,7 @@
 </ul>
 
 <div align="center">
-  <img src="assets/overview.png" alt="SPL-Virtual-World-Base overview" width="100%" />
+  <img src="assets/overview.png" alt="Second Reality Distributed System overview" width="100%" />
 </div>
 
 </div>
@@ -391,7 +391,7 @@ Second-Reality/
 
 ## ✦ Ecosystem
 
-SPL-VIRTUAL-WORLD-BASE is a member of the NOHN AI ecosystem - a family built on deterministic executive kernels and auditable causal semantics. Public projects:
+SECOND REALITY DISTRIBUTED SYSTEM is a member of the NOHN AI ecosystem - a family built on deterministic executive kernels and auditable causal semantics. Public projects:
 
 | Project | Repository | Role |
 |---|---|---|
@@ -417,4 +417,4 @@ This repository is <strong>not open source</strong>. Dual-track model: free for 
   &nbsp;·&nbsp;
   <a href="mailto:ai@nohnlins.com">ai@nohnlins.com</a>
 </p>
-<p align="center"><sub>NOHN AI · SPL-VIRTUAL-WORLD-BASE</sub></p>
+<p align="center"><sub>NOHN AI · SECOND REALITY DISTRIBUTED SYSTEM</sub></p>
