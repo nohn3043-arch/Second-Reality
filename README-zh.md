@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/banner.png" alt="SPL-Virtual-World-Base 横幅" width="100%" />
+  <img src="assets/banner.png" alt="Second Reality Distributed System 横幅" width="100%" />
 </div>
 
 <p align="center">
@@ -22,7 +22,7 @@
 ## ✦ 关于
 
 <p style="font-size: 16px; line-height: 1.9; color: #2F2F2F; margin: 0 0 24px;">
-  <strong>SPL-VIRTUAL-WORLD-BASE</strong> 是一个可运行的虚拟世界与元宇宙基础设施基座，以"宪法 — 法律 — 桥"三级栈组织，并在其下配有真实实现层（<code>system/</code>）。它交付：
+  <strong>SECOND REALITY DISTRIBUTED SYSTEM</strong> 是一个可运行的虚拟世界与元宇宙基础设施基座，以"宪法 — 法律 — 桥"三级栈组织，并在其下配有真实实现层（<code>system/</code>）。它交付：
 </p>
 
 <ul>
@@ -33,7 +33,7 @@
 </ul>
 
 <div align="center">
-  <img src="assets/overview.png" alt="SPL-Virtual-World-Base 概览" width="100%" />
+  <img src="assets/overview.png" alt="Second Reality Distributed System 概览" width="100%" />
 </div>
 
 </div>
@@ -385,7 +385,7 @@ Second-Reality/
 
 ## ✦ 生态
 
-SPL-VIRTUAL-WORLD-BASE 是 NOHN AI 生态的一员 —— 一个建立在确定性执行内核与可审计因果语义上的家族。公开项目：
+SECOND REALITY DISTRIBUTED SYSTEM 是 NOHN AI 生态的一员 —— 一个建立在确定性执行内核与可审计因果语义上的家族。公开项目：
 
 | 项目 | 仓库 | 角色 |
 |---|---|---|
@@ -411,4 +411,5 @@ SPL-VIRTUAL-WORLD-BASE 是 NOHN AI 生态的一员 —— 一个建立在确定�
   &nbsp;·&nbsp;
   <a href="mailto:ai@nohnlins.com">ai@nohnlins.com</a>
 </p>
-<p align="center"><sub>NOHN AI · SPL-VIRTUAL-WORLD-BASE</sub></p>
+<p align="center"><sub>NOHN AI · SECOND REALITY DISTRIBUTED SYSTEM</sub></p>
+
