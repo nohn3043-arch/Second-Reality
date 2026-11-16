@@ -1,0 +1,53 @@
+# Second Reality Distributed System — 本地多节点部署
+#
+# 一个世界节点（world-a）默认启动；第二个节点（world-b）是可选的，
+# 用 --profile second-node 启动，例如：
+#   docker compose --profile second-node up
+#
+# 两个节点是各自独立的世界（不同的 WORLD_ID 和不同的数据卷），
+# 不是自动组成集群 —— 跨世界互联请走 /roaming/* 接口与世界名片注册，
+# 见 docs/cloud-deployment.md。
+
+services:
+  world-a:
+    build: .
+    container_name: second-reality-world-a
+    environment:
+      WORLD_ID: world-a
+      DATA_DIR: /data
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      # 容器内 TLS：把证书挂到 ./certs，再取消下面两行的注释，
+      # 并把 REQUIRE_TLS 设为 "true"（缺证书时 serve() 会拒绝启动）。
+      TLS_CERTFILE: ""
+      TLS_KEYFILE: ""
+      REQUIRE_TLS: "false"
+    ports:
+      - "8000:8000"
+    volumes:
+      # 世界数据（含世界私钥与操作者私钥）持久化到宿主机，重启不丢。
+      # 该目录等同于本机身份本体，永不提交进仓库、永不外发。
+      - ./data/world-a:/data
+      # TLS 证书（只读挂载）。没有证书时留空目录即可。
+      - ./certs:/certs:ro
+    restart: unless-stopped
+
+  world-b:
+    profiles:
+      - second-node
+    build: .
+    container_name: second-reality-world-b
+    environment:
+      WORLD_ID: world-b
+      DATA_DIR: /data
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      TLS_CERTFILE: ""
+      TLS_KEYFILE: ""
+      REQUIRE_TLS: "false"
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./data/world-b:/data
+      - ./certs:/certs:ro
+    restart: unless-stopped

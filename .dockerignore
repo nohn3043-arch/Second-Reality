@@ -1,0 +1,9 @@
+.git
+.github
+__pycache__
+*.pyc
+.pytest_cache
+data
+.world_data
+world_card.json
+*.log
