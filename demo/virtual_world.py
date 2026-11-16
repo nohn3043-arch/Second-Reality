@@ -116,7 +116,7 @@ class WorldConfig:
     tax_rate:float=TAX_RATE
     wealth_hardcap_tax:float=WEALTH_HARDCAP_TAX
     # 年龄语义：原先 1 tick = 1 岁，在 tps=10 的 GUI 下 80 岁只需 8 秒，社会第 80 tick 即开始灭绝
-    ticks_per_year:int=10
+    ticks_per_year:int=50               # 时间流速：10tps 下 1 年=5 真实秒（原 10=1 秒/年，老死过快）
     adult_age:int=18; marriage_age:int=20
     birth_min_age:int=22; birth_max_age:int=60; elder_age:int=80
     # 婚姻/生育概率：原先是 _check_reproduction 内的字面量，改 config 无效（与 UBI/税率同类缺陷）
@@ -2520,7 +2520,7 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_tick=0, confi
     # zoom=1 为 1:1 像素；默认自适应把整岛铺进视口（小窗口看全图，大窗口不放大糊像素）
     def _fit_zoom():
         return max(0.15,min(1.0,MAP_W/float(WMAP_W),MAP_H/1060.0))
-    zoom=_fit_zoom()
+    zoom=1.0; zoom_auto=False   # 默认 1:1 像素（清晰优先，相机跟随玩家）；0 键可切全图概览
     config=config or WorldConfig(world_size=WORLD_SIZE,initial_agents=30,initial_resources=80,initial_buildings=8,seed=seed)
     import goal_system as goal_mod
     import factions as story_mod

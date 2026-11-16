@@ -15,6 +15,8 @@ Env vars:
 
 import os
 
+import os as _os_dpi
+_os_dpi.environ.setdefault("SDL_WINDOWS_DPI_AWARENESS","permonitorv2")   # 高DPI 物理像素渲染，避免系统拉伸模糊
 import pygame
 
 BG = (8, 10, 16)
