@@ -1455,7 +1455,9 @@ class NohnWorld:
                 a.affect=a.persona.step(a,a._perceived)
             a.needs["belonging"]=min(100.0,a.needs["belonging"]+self._event_add("belonging_gain",0.0))
         self._regenerate_resources(); self._build_houses()
-        te.extend(self._check_reproduction()); te.extend(self._check_deaths()); te.extend(self._compliance_check())
+        if not getattr(self,"demo_ff",False):   # 纪元预演期冻结生育：人口由世代补齐维持（防指数爆炸）
+            te.extend(self._check_reproduction())
+        te.extend(self._check_deaths()); te.extend(self._compliance_check())
         if self._tick%10==0: self._distribute_ubi()
         if self._tick%30==0: self._collect_taxes()
         if self._tick%50==0: self._apply_inflation()
@@ -2425,7 +2427,7 @@ def run_era_selection(seed=0):
                 except Exception: pass
         return pygame.font.SysFont("microsoftyahei,simhei,arial",sz,bold=b)
     ft=_lf(22,True); fm=_lf(14); fs=_lf(12); fh=_lf(13,True)
-    eras=EraCalendar.ERAS; sel=7
+    eras=EraCalendar.ERAS; sel=0
     CW,CH=350,120; COLS=2; SX=20; SY=70; GAP=12
     pal_bg=(20,22,30); pal_card=(40,44,58); pal_sel=(80,76,30)
     pal_title=(230,210,120); pal_text=(200,200,210); pal_dim=(130,130,145)
@@ -2535,11 +2537,19 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
     import factions as story_mod
     world=story_mod.StoryWorld(config)   # 目标层+剧情层随 tick 自动步进（M2.6/M2.7）
     if start_tick>0:                     # 纪元开局：快进至纪元 start_tick（纪元=已演化的世界状态）
-        print("[era] 纪元预演：快进 %d tick（一次性成本，以已演化世界状态开局）…"%start_tick)
-        for _ in range(start_tick): world.tick()
+        print("[era] 纪元预演：快进 %d tick（一次性成本，以已演化世界状态开局）…"%start_tick,flush=True)
+        world.demo_ff=True               # 预演冻结生育：人口由世代补齐维持（防指数爆炸挂死）
+        _lr=0
+        for _ in range(start_tick):
+            world.tick()
+            if world._tick-_lr>=world.config.ticks_per_year*5:
+                _replenish_era_population(world); _lr=world._tick   # 每 5 年世代补齐
+            if (_+1)%1000==0:
+                print("[era] 预演进度 %d/%d"%(world._tick,start_tick),flush=True)
+        world.demo_ff=False
         _rp=_replenish_era_population(world)   # 世代补齐：新迁入一代补至开局规模
         print("[era] 预演完成：tick=%d 存活居民=%d（世代补齐 +%d）"%(
-            world._tick,len([a for a in world.agents if a.alive]),_rp))
+            world._tick,len([a for a in world.agents if a.alive]),_rp),flush=True)
     player=world.add_player()
     player.facing=math.pi/2                  # 初始面朝下（像素小人四向）
     player_walk_phase=0.0
@@ -3823,7 +3833,15 @@ def _print_demo_note(cfg):
 def run_headless(ticks=1000, verbose=False, seed=0, config=None, start_tick=0):
     config=config or WorldConfig(world_size=60,initial_agents=30,initial_resources=80,initial_buildings=8,seed=seed)
     world=NohnWorld(config)
-    for _ in range(start_tick): world.tick()      # 纪元开局：快进至纪元 start_tick
+    if start_tick>0:
+        print("[era] 纪元预演：快进 %d tick…"%start_tick,flush=True)
+        world.demo_ff=True
+        _lr=0
+        for _ in range(start_tick):
+            world.tick()
+            if world._tick-_lr>=world.config.ticks_per_year*5:
+                _replenish_era_population(world); _lr=world._tick
+        world.demo_ff=False
     _replenish_era_population(world)              # 世代补齐（headless 同口径）
     t0=time.time()
     for i in range(ticks):
