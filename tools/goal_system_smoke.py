@@ -908,6 +908,43 @@ _rp=_repfn(_ws7)
 check("世代补齐：纪元快进后人口恢复至开局规模（演示层设定）",
       len([a for a in _ws7.agents if a.alive])>=_ws7.config.initial_agents and _rp>0,
       "补齐=%d 现存=%d"%(_rp,len([a for a in _ws7.agents if a.alive])))
+from demo.virtual_world import WORLD_EVENTS as _WEL   # noqa: E402
+_wd8,_pd8 = fresh_world(708)
+_dr=[e for e in _WEL if e["id"]=="drought"][0]
+_t0=(_dr["phase"]-(_zlib.crc32(b"drought")+708*7))%_dr["interval"]
+_wd8._tick=(_t0-1)%_dr["interval"]
+_wd8.tick()
+check("旱灾触发：相位调度命中且再生减半（零 RNG）",
+      any(x["id"]=="drought" for x in _wd8.world_events)
+      and abs(_wd8._event_mod("regen_scale",1.0)-0.5)<1e-9,
+      "events=%s"%[x["id"] for x in _wd8.world_events])
+_wf=[e for e in _WEL if e["id"]=="festival"][0]
+_wd9,_pd9 = fresh_world(709)
+_t1=(_wf["phase"]-(_zlib.crc32(b"festival")+709*7))%_wf["interval"]
+_wd9._tick=(_t1-1)%_wf["interval"]
+_b0=_pd9.needs["belonging"]
+_wd9.tick()
+check("丰收节触发：归属感随事件上升、交易让利生效",
+      _pd9.needs["belonging"]>_b0
+      and abs(_wd9._event_mod("trade_price_mul",1.0)-0.9)<1e-9,
+      "belonging %.1f→%.1f"%( _b0,_pd9.needs["belonging"]))
+_wc0 = fresh_world(710)[0]
+_cv=[e for e in _WEL if e["id"]=="caravan"][0]
+_t2=(_cv["phase"]-(_zlib.crc32(b"caravan")+710*7))%_cv["interval"]
+_wc0._tick=(_t2-1)%_cv["interval"]
+_wc0.tick()
+_tr=sorted([a for a in _wc0.agents if a.alive],key=lambda a:a.aid)[:2]
+check("远方商队：确定性选人补货入背包",
+      all(a.inventory.get("fruit",0)>=2 for a in _tr),
+      "fruit=%s"%[a.inventory.get("fruit",0) for a in _tr])
+_wd8b,_pd8b = fresh_world(708)
+_wd8b._tick=(_t0-1)%_dr["interval"]
+_wd8b.tick()
+check("世界事件调度同 seed 逐项一致（零 RNG）",
+      [(x["id"],x["until"]) for x in _wd8.world_events]
+      ==[(x["id"],x["until"]) for x in _wd8b.world_events])
+check("世界事件表确定性（WORLD_EVENTS 常量）",
+      len(_WEL)==5 and all(e["interval"]>0 and 0<=e["phase"]<e["interval"] for e in _WEL))
 _wc1.agents[0].inventory["food"]=2
 _pc1.fx,_pc1.fy=float(_wc1.agents[0].pos.x),float(_wc1.agents[0].pos.y)
 _ca=[a[0] for a in _ctxact(_pc1,_wc1)]
