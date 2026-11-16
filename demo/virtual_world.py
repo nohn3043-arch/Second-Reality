@@ -1665,7 +1665,7 @@ def screen_to_grid(mx,my):
 SETTINGS_PATH=os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            ".world_data","settings.json")
 SETTINGS_DEFAULTS={"heat":True,"graph":True,"eventfx":True,"daynight":True,
-                   "goals":True,"helpbar":True,"speed":10,
+                   "goals":True,"helpbar":True,"speed":1,
                    "fullscreen_start":False,"keybinds":{}}
 def load_settings():
     """读 demo/.world_data/settings.json；缺失/损坏回默认值。"""
@@ -2456,7 +2456,7 @@ def run_era_selection(seed=0):
         screen.blit(fs.render("↑↓←→ 选择  ·  Enter 确认  ·  ESC 跳过(默认当下)",True,pal_hint),(SX,SH-28))
         pygame.display.flip(); clock.tick(30)
 
-def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_tick=0, config=None,
+def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config=None,
             auto_story=False, fullscreen=False):
     global WW,WH,MAP_W,MAP_H,PANEL_W,STATS_H    # 布局随窗口尺寸重算（HUD 读的是这几个）
     import pygame
@@ -2535,6 +2535,7 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_tick=0, confi
     click_fx=[0,0,0]                   # 点击脉冲：[gx,gy,剩余帧]
     build_mode=False; build_type="house"
     running=True; paused=False; speed=tps; selected=None
+    _acc=0.0                           # 固定步长积分器：1 真实秒 = 1 sim tick（speed 倍速）
     help_dialog=False; help_tab="keys"                 # 按键/设置弹窗（H/F1 或右上按钮）
     ctx_menu=None; ctx_sel=0                           # 上下文交互菜单（E 键）
     rebind_action=None; settings_scroll=0              # 键位重绑定捕获 / 设置列表滚动
@@ -2557,7 +2558,7 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_tick=0, confi
           "need":deque(maxlen=240),"money":deque(maxlen=240)}
     last_wb=world._wb
 
-    def spawn_fx(gx,gy,txt,col,ttl=28):
+    def spawn_fx(gx,gy,txt,col,ttl=90):   # ttl 按渲染帧计：60fps 下约 1.5s
         cx,cy=tile_center(gx,gy)
         fx.append({"x":cx,"y":cy,"t":txt,"c":col,"ttl":ttl,"age":0})
         if len(fx)>70: del fx[0]
@@ -2579,7 +2580,7 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_tick=0, confi
                     spawn_fx(a.pos.x,a.pos.y,txt,EVENT_COLOR.get(v,(200,200,200)))
         if world._wb>last_wb:
             for a in world.agents[-(world._wb-last_wb):]:
-                if show_eventfx: spawn_fx(a.pos.x,a.pos.y,"*",EVENT_COLOR["birth"],36)
+                if show_eventfx: spawn_fx(a.pos.x,a.pos.y,"*",EVENT_COLOR["birth"],120)
                 feed.append("t%-5d %-4s %s (gen%d)"%(world._tick,EVENT_LABEL["birth"],a.aid,a.generation))
             last_wb=world._wb
 
@@ -3126,10 +3127,10 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_tick=0, confi
         paused=not paused
     def _act_speed_up():
         nonlocal speed
-        speed=min(60,speed+5); settings["speed"]=speed; save_settings(settings)
+        speed=min(32,max(2,speed*2)); settings["speed"]=speed; save_settings(settings)
     def _act_speed_down():
         nonlocal speed
-        speed=max(1,speed-5); settings["speed"]=speed; save_settings(settings)
+        speed=max(1,speed//2); settings["speed"]=speed; save_settings(settings)
     def _act_save():
         world.save_state("second_reality_save.json"); print("Saved")
     def _act_shot():
@@ -3268,7 +3269,7 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_tick=0, confi
             elif kind=="toggle":
                 _apply_setting(payload,not bool(settings.get(payload,True)))
             elif kind=="speed":
-                _cy=(1,5,10,20,40)
+                _cy=(1,2,4,8,16,32)
                 _apply_setting("speed",_cy[(_cy.index(speed)+1)%len(_cy)])
             elif kind=="rebind": rebind_action=payload
             elif kind=="resetbinds":
@@ -3350,7 +3351,7 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_tick=0, confi
                 y+=30
             sb=pygame.Rect(r.x+24,y+4,130,22)
             _rounded(screen,sb,(52,56,82),radius=6,outline=(90,96,130),ow=1)
-            screen.blit(font_s.render("速度：%d tps"%speed,True,PAL["text"]),
+            screen.blit(font_s.render("倍速：×%d（1=1:1）"%speed,True,PAL["text"]),
                         (sb.x+10,y+9))
             _ui_rects.append((sb,"speed",None))
             y+=40
@@ -3725,11 +3726,17 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_tick=0, confi
             -(1 if keys[pygame.K_UP] or keys[pygame.K_w] else 0))
         if story_menu is not None or help_dialog or ctx_menu is not None:
             dx=dy=0          # 弹窗/菜单态：封锁方向键移动（W/S 在菜单里是导航）
-        if dx!=0 or dy!=0:
-            player.move(dx,dy,world.size)
-            player_walk_phase=(player_walk_phase+0.5)%1.0   # 行走相位→四帧步态（一倍速：2 格一个周期）
-            if player.energy<5: player.rest()
-        if not paused:
+        _dt=clock.tick(60)/1000.0                  # 渲染恒 60fps：输入/浮字/悬停与仿真解耦
+        if paused: _acc=0.0                        # 暂停不累积，防解除后爆冲
+        else: _acc+=_dt
+        _need=1.0/max(1,speed)                     # 1:1 现实流速：speed=1 → 1 真实秒 = 1 sim tick
+        _sim=0
+        while _acc>=_need and running and _sim<=speed*2+2:   # 掉帧上限，防螺旋追赶
+            _acc-=_need; _sim+=1
+            if dx!=0 or dy!=0:
+                player.move(dx,dy,world.size)
+                player_walk_phase=(player_walk_phase+0.5)%1.0   # 每 sim tick 半步：1 格/秒步行节奏
+                if player.energy<5: player.rest()
             note_events(world.tick()); sample_history()
             for _tr in getattr(world,"last_goal_transitions",[]) or []:
                 if _tr["status"]=="active":
@@ -3745,10 +3752,10 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_tick=0, confi
                         if show_eventfx:
                             spawn_fx(int(round(player.fx)),int(round(player.fy)),"✓",(130,255,160))
             if max_ticks and world._tick>=max_ticks: running=False
+        if _sim>2: _acc=0.0                        # 积压丢弃（实时语义，不螺旋追赶）
         for f in fx: f["age"]+=1
         fx=[f for f in fx if f["age"]<f["ttl"]]
         render_frame(with_tooltip=True)
-        clock.tick(speed if speed>0 else 0)
     pygame.quit()
     return world
 
@@ -3879,7 +3886,7 @@ if __name__=="__main__":
     ap.add_argument("--world-size",type=int,default=None,help="地图边长（格）；1000 人建议 200")
     ap.add_argument("--resources",type=int,default=None,help="初始资源数（默认按人口配平，受 size²×8%% 上限约束）")
     ap.add_argument("--buildings",type=int,default=None,help="初始建筑数")
-    ap.add_argument("--tps",type=int,default=10,help="GUI 每秒 tick 数")
+    ap.add_argument("--tps",type=int,default=1,help="GUI 每秒 sim tick 数；1=1:1 现实流速（一秒等于一秒）")
     ap.add_argument("--fullscreen",action="store_true",
                     help="GUI 直接全屏启动（F11 / Alt+Enter 随时切换，ESC 退出全屏）")
     ap.add_argument("--window",metavar="WxH",default=None,
