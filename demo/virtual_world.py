@@ -1839,7 +1839,7 @@ BLD_SPR={}      # 建筑类型 -> 生成立绘
 PROP_SPR={}     # 道具类型 pine/oak/bush/rock -> 生成立绘
 CHAR_SPR={}     # 世界观角色 key -> Q 版立绘
 NPC_SPR={}      # 通用职业皮肤 key（sword/knight/mage/warrior/merchant/noble）-> Q 版立绘
-SKY_RIFT=None   # 天穹裂变后的天穹裂痕（黑底辉光抠图；缺则不画）
+SKY_RIFT=None   # 天穹裂痕立绘（黑底辉光抠图）：地图不画，供剧情动画调用
 
 NPC_SKIN_KEYS=("sword","knight","mage","warrior","merchant","noble")
 VOCATION_SKIN={
@@ -2737,9 +2737,7 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
                 screen.blit(font_b.render(f["t"],True,PAL["ink"]),(f["x"]-4+oxx,f["y"]-rise+oyy))
             screen.blit(font_b.render(f["t"],True,f["c"]),(f["x"]-4,f["y"]-rise))
         # 天穹裂变（tick≥800 纪元界）：天穹裂痕辉光叠在地图最上层，纯渲染层
-        if SKY_RIFT is not None and world._tick>=800:
-            SKY_RIFT.set_alpha(150+int(25*math.sin(world._tick*0.05)))
-            screen.blit(SKY_RIFT,(0,int(WMAP_H*0.04)))
+        # 天穹裂痕不上地图（用户口径：属剧情动画素材）——SKY_RIFT 已加载备用
 
     def draw_need_bar(x,y,val,w=150,h=10):
         _rounded(screen,(x-1,y-1,w+2,h+2),PAL["ink"],radius=int(h/2)+2)
