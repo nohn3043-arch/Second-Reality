@@ -1569,8 +1569,7 @@ class EraCalendar:
         {"key":"academy","name":"魔法学院纪","desc":"魔法学院创办，学术兴起","alpha_years_ago":230000,"start_tick":1500},
         {"key":"mingyir","name":"明伊尔纪","desc":"塔·明伊尔魔法工业革命，七大行业确立","alpha_years_ago":130000,"start_tick":2500},
         {"key":"ayyas","name":"阿亚斯纪","desc":"天神教鼎盛，白夜清洗者组织活跃","alpha_years_ago":90000,"start_tick":3500},
-        {"key":"alpha_dawn","name":"阿尔法元年","desc":"阿尔法帝国统一人族板块","alpha_years_ago":0,"start_tick":5000},
-        {"key":"present","name":"当下","desc":"伊莉斯·Von·安启降生，始祖时代","alpha_years_ago":0,"start_tick":7000},
+        {"key":"alpha","name":"阿尔法纪元","desc":"阿尔法元年以降——伊莉斯·Von·安启在世（职阶「始祖」，非公开），神之帝女","alpha_years_ago":0,"start_tick":5000},
     ]
     @classmethod
     def get_era(cls,key):
@@ -2450,8 +2449,6 @@ def run_era_selection(seed=0):
             ya+=4
             if e["alpha_years_ago"]>0:
                 ya_text="距今 %d 万年前"%e["alpha_years_ago"]
-            elif e["key"]=="alpha_dawn":
-                ya_text="阿尔法纪元年"
             else:
                 ya_text="阿尔法纪 · 当下"
             screen.blit(fs.render(ya_text,True,pal_dim),(cx+12,ya))
