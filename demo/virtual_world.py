@@ -1594,36 +1594,200 @@ def build_sky(seed):
             pygame.draw.circle(s,PAL["cloud"],(cx+dx,cy+dy),rr)
     return s
 
-def build_ground(seed):
-    """手绘感草地瓦片 + 岛边缘 + 岛下阴影，预渲染一次。
+# ---- 地形层：确定性值噪声 + 聚落结构（只改观感，不动仿真）----
+def _vnoise(seed,gx,gy,scale):
+    """平滑值噪声：同 seed 同坐标必得同值，多倍频叠加才像地貌，不像马赛克。"""
+    x=gx/scale; y=gy/scale
+    x0=math.floor(x); y0=math.floor(y)
+    fx=x-x0; fy=y-y0
+    fx=fx*fx*(3-2*fx); fy=fy*fy*(3-2*fy)
+    h=lambda a,b: _hash2(int(a)+seed*131,int(b)+seed*17)
+    return (h(x0,y0)*(1-fx)+h(x0+1,y0)*fx)*(1-fy)+(h(x0,y0+1)*(1-fx)+h(x0+1,y0+1)*fx)*fy
+
+T_GRASS=0; T_FOREST=1; T_HILL=2; T_MEADOW=3; T_PLAZA=4; T_ROAD=5
+GROUND_PAL={T_GRASS:((146,204,124),(126,186,112)),
+    T_FOREST:((104,164,102),(86,144,86)),
+    T_HILL:((208,188,140),(190,168,120)),
+    T_MEADOW:((188,220,140),(168,206,124)),
+    T_PLAZA:((204,200,192),(184,180,172)),
+    T_ROAD:((190,162,120),(172,144,104))}
+PLAZA_R=5
+
+def _pct(values,q):
+    """取分位阈值：用排名而不是固定数值，换 seed 也不会整岛变一种地貌。"""
+    xs=sorted(values)
+    if not xs: return 0.0
+    return xs[max(0,min(len(xs)-1,int(q*len(xs))))]
+
+def terrain_grid(seed,buildings=None):
+    """60×60 地块类型表 + 广场中心。同 seed 同建筑位 → 同结果。
+    不建水面：角色没有可通行约束，画湖会让人站在湖里，观感与仿真不一致。"""
+    bs=buildings or []
+    if bs:
+        pcx=int(round(sum(b["pos"][0] for b in bs)/len(bs)))
+        pcy=int(round(sum(b["pos"][1] for b in bs)/len(bs)))
+    else:
+        pcx=pcy=WORLD_SIZE//2
+    g=[[T_GRASS for _ in range(WORLD_SIZE)] for _ in range(WORLD_SIZE)]
+    # 三张独立噪声场 + 分位阈值：森林 ~20%、丘陵 ~12%、花田 ~15%，剩余草地
+    fs=[[_vnoise(seed,gx,gy,7.0) for gy in range(WORLD_SIZE)] for gx in range(WORLD_SIZE)]
+    hs=[[_vnoise(seed+7,gx,gy,5.5) for gy in range(WORLD_SIZE)] for gx in range(WORLD_SIZE)]
+    ms=[[_vnoise(seed+13,gx,gy,4.5) for gy in range(WORLD_SIZE)] for gx in range(WORLD_SIZE)]
+    fT=_pct([v for row in fs for v in row],0.20)
+    hT=_pct([v for row in hs for v in row],0.88)
+    mT=_pct([v for row in ms for v in row],0.62)
+    for gx in range(WORLD_SIZE):
+        for gy in range(WORLD_SIZE):
+            # 村落半径 11 内不生成林木：留出空地，否则广场与道路被树盖死
+            far=math.hypot(gx-pcx,gy-pcy)>11
+            if far and fs[gx][gy]<=fT: g[gx][gy]=T_FOREST
+            elif hs[gx][gy]>=hT: g[gx][gy]=T_HILL
+            elif ms[gx][gy]>=mT: g[gx][gy]=T_MEADOW
+            else: g[gx][gy]=T_GRASS
+    # 广场：以建筑质心为圆心的铺石区（聚落的地标，也是道路汇聚点）
+    for gx in range(max(0,pcx-PLAZA_R),min(WORLD_SIZE,pcx+PLAZA_R+1)):
+        for gy in range(max(0,pcy-PLAZA_R),min(WORLD_SIZE,pcy+PLAZA_R+1)):
+            if (gx-pcx)**2+(gy-pcy)**2<=PLAZA_R*PLAZA_R: g[gx][gy]=T_PLAZA
+    # 道路：每栋建筑到广场的 L 形土路（先横后竖，确定性；广场不覆盖）
+    for b in bs:
+        bx,by=b["pos"]
+        for x in range(min(bx,pcx),max(bx,pcx)+1):
+            if g[x][by]!=T_PLAZA: g[x][by]=T_ROAD
+        for y in range(min(by,pcy),max(by,pcy)+1):
+            if g[pcx][y]!=T_PLAZA: g[pcx][y]=T_ROAD
+    return g,(pcx,pcy)
+
+def terrain_props(seed,buildings=None):
+    """林木 / 岩石 / 花丛。返回深度排序用的道具表，与角色同层绘制。"""
+    grid,(pcx,pcy)=terrain_grid(seed,buildings)
+    occ=set()
+    for b in (buildings or []):
+        bx,by=b["pos"]
+        for dx in (-2,-1,0,1,2):
+            for dy in (-2,-1,0,1,2): occ.add((bx+dx,by+dy))
+    out=[]
+    for gx in range(WORLD_SIZE):
+        for gy in range(WORLD_SIZE):
+            if (gx,gy) in occ: continue
+            t=grid[gx][gy]
+            if math.hypot(gx-pcx,gy-pcy)<PLAZA_R+2: continue   # 广场周边不长树
+            n=_hash2(gx*7+seed*101,gy*11+seed*37)
+            if t==T_FOREST and n<0.22:
+                out.append({"gx":gx,"gy":gy,"kind":("pine" if n<0.12 else "oak"),"s":0.90+n*0.55})
+            elif t==T_HILL and n<0.26:
+                out.append({"gx":gx,"gy":gy,"kind":"rock","s":0.62+n*0.7})
+            elif t==T_MEADOW and n<0.06:
+                out.append({"gx":gx,"gy":gy,"kind":"bush","s":0.55+n*0.5})
+    return out
+
+def build_ground(seed,buildings=None):
+    """手绘感地块 + 聚落广场土路 + 岛缘侧壁，预渲染一次。
     必须用 SRCALPHA：菱形之外的像素保持透明，否则会把天空整个盖成黑幕
     （v1 缺陷——地图四周全黑即此因）。"""
     s=pygame.Surface((MAP_W,MAP_H),pygame.SRCALPHA)
+    grid,(pcx,pcy)=terrain_grid(seed,buildings)
+    EDGE_H=13                                  # 岛缘侧壁厚度（假厚度）
     for gx in range(WORLD_SIZE):
         for gy in range(WORLD_SIZE):
             cx,cy=tile_center(gx,gy)
+            t=grid[gx][gy]
             n=_hash2(gx+seed,gy*3+seed)
-            base=_lerp_color(PAL["grass_a"],PAL["grass_b"],n)
+            base=_lerp_color(GROUND_PAL[t][0],GROUND_PAL[t][1],n)
             pts=[(cx,cy-TH2),(cx+TW2,cy),(cx,cy+TH2),(cx-TW2,cy)]
             pygame.draw.polygon(s,base,pts)
             # 上半面提亮（赛璐璐两段式受光）
-            pygame.draw.polygon(s,_lerp_color(base,PAL["grass_hi"],0.55),
+            pygame.draw.polygon(s,_lerp_color(base,(255,255,255),0.20),
                 [(cx,cy-TH2),(cx+TW2,cy),(cx-TW2,cy)])
-            # 手绘噪声：草叶/小花
-            if n>0.84:
-                pygame.draw.line(s,_darken(base,0.8),(cx-2,cy-2),(cx-3,cy+1),1)
-                pygame.draw.line(s,_darken(base,0.8),(cx+1,cy-3),(cx+2,cy),1)
-            elif n>0.72:
-                pc=(252,220,180) if n>0.78 else (255,240,220)
-                pygame.draw.circle(s,pc,(cx+3,cy-3),1)
-            elif n<0.10:
-                pygame.draw.circle(s,(112,168,120),(cx-3,cy+2),1)
+            a=_darken(base,0.92); b2=_darken(base,0.84)
+            if t==T_GRASS:
+                if n>0.84:
+                    pygame.draw.line(s,b2,(cx-2,cy-2),(cx-3,cy+1),1)
+                    pygame.draw.line(s,b2,(cx+1,cy-3),(cx+2,cy),1)
+                elif n>0.72:
+                    pc=(252,220,180) if n>0.78 else (255,240,220)
+                    pygame.draw.circle(s,pc,(cx+3,cy-3),1)
+                elif n<0.10:
+                    pygame.draw.circle(s,(112,168,120),(cx-3,cy+2),1)
+            elif t==T_FOREST:               # 林下：针叶落影 + 苔点
+                if n>0.55:
+                    pygame.draw.line(s,b2,(cx+2,cy-4),(cx+4,cy-1),1)
+                    pygame.draw.line(s,b2,(cx-4,cy-1),(cx-2,cy-4),1)
+                if n<0.18: pygame.draw.circle(s,(96,150,96),(cx-3,cy+2),1)
+            elif t==T_HILL:                 # 岩地：裂纹 + 碎石
+                if n>0.62: pygame.draw.line(s,b2,(cx-5,cy+1),(cx+3,cy-3),1)
+                if n>0.38 and n<0.46: pygame.draw.circle(s,(168,164,158),(cx+3,cy-2),1)
+            elif t==T_MEADOW:               # 花田：三色小花
+                if n>0.58:
+                    pc=(252,214,226) if n<0.74 else ((250,238,170) if n<0.90 else (240,246,255))
+                    pygame.draw.circle(s,pc,(cx+2,cy-3),1)
+                    pygame.draw.circle(s,pc,(cx-3,cy+1),1)
+            elif t==T_ROAD:                 # 土路：碎石与车辙
+                if n>0.66: pygame.draw.circle(s,_darken(base,0.78),(cx+2,cy+1),1)
+                if n<0.20: pygame.draw.circle(s,_lerp_color(base,(255,255,255),0.35),(cx-2,cy+2),1)
+                pygame.draw.line(s,a,(cx-TW2+3,cy+TH2-4),(cx-3,cy+2),1)
+            elif t==T_PLAZA:                # 铺石：砖缝 + 外圈压边
+                d=math.hypot(gx-pcx,gy-pcy)
+                pygame.draw.polygon(s,a,pts,1)
+                if d>=PLAZA_R-1: pygame.draw.polygon(s,b2,pts,2)
+    # 广场地标：石井（纯地面装饰，不参与仿真，不做可通行判定）
+    wx,wy=tile_center(pcx,pcy)
+    pygame.draw.ellipse(s,(150,146,140),(wx-13,wy-2,26,14))
+    pygame.draw.ellipse(s,(208,204,196),(wx-12,wy-3,24,12))
+    pygame.draw.ellipse(s,(74,78,92),(wx-8,wy-1,16,8))
+    pygame.draw.ellipse(s,PAL["ink"],(wx-13,wy-2,26,14),1)
+    # 岛缘侧壁：只画下缘两个面（+x 面与 +y 面），做出岛的厚度
+    for gx in range(WORLD_SIZE):
+        for gy in range(WORLD_SIZE):
+            cx,cy=tile_center(gx,gy)
+            if gx==WORLD_SIZE-1:
+                col=_darken(PAL["grass_edge"],0.92)
+                pygame.draw.polygon(s,col,[(cx+TW2,cy),(cx,cy+TH2),
+                    (cx,cy+TH2+EDGE_H),(cx+TW2,cy+EDGE_H)])
+            if gy==WORLD_SIZE-1:
+                col=_darken(PAL["grass_edge"],0.80)
+                pygame.draw.polygon(s,col,[(cx-TW2,cy),(cx,cy+TH2),
+                    (cx,cy+TH2+EDGE_H),(cx-TW2,cy+EDGE_H)])
     # 岛轮廓（粗描边 = 手绘 inking）
     top=tile_center(0,0); right=tile_center(WORLD_SIZE-1,0)
     bot=tile_center(WORLD_SIZE-1,WORLD_SIZE-1); left=tile_center(0,WORLD_SIZE-1)
     rim=[top,(right[0],right[1]+TH2),(bot[0],bot[1]+TH2),(left[0],left[1]+TH2)]
     pygame.draw.polygon(s,PAL["grass_edge"],rim,3)
     return s
+
+def draw_prop(screen,overlay,p,tick=0):
+    """树 / 岩石 / 灌木：进深度排序，人走到树后会被树挡住。"""
+    gxp,gyp=grid_ground(p["gx"],p["gy"])
+    k=p["kind"]; sc=p["s"]
+    sway=int(math.sin(tick*0.12+p["gx"]*0.7+p["gy"]*0.3)*1.5) if k!="rock" else 0
+    if k=="rock":
+        _draw_shadow(overlay,gxp,gyp,int(16*sc),int(5*sc))
+        r=int(9*sc)
+        pygame.draw.ellipse(screen,(152,150,148),(gxp-r,gyp-r//2,r*2,r))
+        pygame.draw.ellipse(screen,(180,178,174),(gxp-r+2,gyp-r//2+1,r*2-4,max(2,int(r*0.7))))
+        pygame.draw.ellipse(screen,PAL["ink"],(gxp-r,gyp-r//2,r*2,r),1)
+        return
+    if k=="bush":
+        _draw_shadow(overlay,gxp,gyp,int(10*sc),int(4*sc))
+        r=int(6*sc)
+        pygame.draw.circle(screen,(126,184,120),(gxp-r//2,gyp-r//3),r)
+        pygame.draw.circle(screen,(146,204,132),(gxp+r//2,gyp-r//3),r)
+        pygame.draw.circle(screen,(170,222,148),(gxp,gyp-r),r)
+        return
+    _draw_shadow(overlay,gxp,gyp,int(18*sc),int(6*sc))
+    th=int(12*sc)
+    pygame.draw.rect(screen,(120,88,58),(gxp-2,gyp-th,4,th))
+    if k=="pine":
+        for dy,wd,col in ((0,23,(72,130,90)),(-12,18,(86,148,100)),(-22,13,(104,166,114))):
+            w=int(wd*sc*0.5); by=gyp-th+int(dy*sc)
+            pygame.draw.polygon(screen,col,[(gxp-w+sway,by),(gxp+sway,by-int(17*sc)),(gxp+w+sway,by)])
+            pygame.draw.polygon(screen,PAL["ink"],[(gxp-w+sway,by),(gxp+sway,by-int(17*sc)),(gxp+w+sway,by)],1)
+    else:
+        cr=int(14*sc); hx=gxp+sway; hy=gyp-th-int(9*sc)
+        pygame.draw.circle(screen,(102,162,104),(hx,hy),cr)
+        pygame.draw.circle(screen,(128,188,124),(hx-int(cr*0.55),hy-int(cr*0.35)),int(cr*0.78))
+        pygame.draw.circle(screen,(156,208,142),(hx+int(cr*0.5),hy-int(cr*0.45)),int(cr*0.66))
+        pygame.draw.circle(screen,(176,222,158),(hx+int(cr*0.1),hy-int(cr*0.72)),int(cr*0.42))
+        pygame.draw.circle(screen,PAL["ink"],(hx,hy),cr,1)
 
 def build_island_shadow():
     s=pygame.Surface((MAP_W,MAP_H),pygame.SRCALPHA)
@@ -1795,7 +1959,7 @@ def draw_speech_bubble(screen,font,x,y,text):
     pygame.draw.line(screen,PAL["ink"],(x+4,by+bh-1),(x,by+bh+4),1)
     screen.blit(font.render(text,True,(40,36,48)),(bx+6,by+2))
 
-def draw_agent_anim(screen,overlay,a,selected,tick,world,warn_surf,font=None):
+def draw_agent_anim(screen,overlay,a,selected,tick,world,warn_surf,font=None,allow_bubble=True):
     gx,gy=a.pos.x,a.pos.y
     gxp,gyp=grid_ground(gx,gy)
     if not a.alive:
@@ -1838,8 +2002,8 @@ def draw_agent_anim(screen,overlay,a,selected,tick,world,warn_surf,font=None):
     if selected and a.aid==selected.aid:
         _rounded(screen,(hx-22,hy-14,44,52),(255,238,120),radius=8,outline=(120,100,30),ow=1)
         _rounded(screen,(hx-21,hy-13,42,50),(255,238,120),radius=8,outline=(255,238,120),ow=2)
-    # 聊天气泡（错峰开口，台词确定性轮换；画在最上层）
-    _line=npc_line(a,tick)
+    # 聊天气泡（错峰开口，台词确定性轮换；画在最上层；de-clutter 由调用方按网格控制）
+    _line=npc_line(a,tick) if allow_bubble else None
     if _line:
         draw_speech_bubble(screen,font,gxp,gyp-60,_line)
 
@@ -1936,7 +2100,8 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
     show_goals=True
     show_heat=True; show_graph=True; show_eventfx=True; show_daynight=True
     sky_surf=build_sky(seed)
-    ground_surf=build_ground(seed)
+    props=terrain_props(seed,world.buildings)          # 林木/岩石/花丛（只画，不参与仿真）
+    ground_surf=build_ground(seed,world.buildings)     # 地形 + 广场 + 道路（以初始建筑为准）
     shadow_surf=build_island_shadow()
     overlay=pygame.Surface((MAP_W,MAP_H),pygame.SRCALPHA)
     warn_surf=font_b.render("!",True,(255,255,255))
@@ -2021,6 +2186,8 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
         screen.blit(overlay,(0,0))
         # 实体按深度排序（画家算法：近的晚画）
         ents=[]
+        for p in props:
+            ents.append((p["gx"]+p["gy"],-1,("t",p)))
         for b in world.buildings:
             ents.append((b["pos"][0]+b["pos"][1],0,("b",b)))
         for r in world.resources:
@@ -2031,10 +2198,21 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
         if world.player:
             ents.append((world.player.fx+world.player.fy,3,("p",world.player)))
         ents.sort(key=lambda e:(e[0],e[1]))
+        # 气泡去重叠：同一屏幕网格内只让一个开口，选中的必开口
+        _bub_ok=set(); _bub_seen={}
+        for a in sorted(world.agents,key=lambda x:(x.pos.x+x.pos.y,x.aid)):
+            if not a.alive: continue
+            gxp,_gyp=grid_ground(a.pos.x,a.pos.y)
+            k=gxp//56
+            if _bub_seen.get(k): continue
+            _bub_seen[k]=1; _bub_ok.add(a.aid)
+        if selected and selected.alive: _bub_ok.add(selected.aid)
         for _,_,(kind,obj) in ents:
             if kind=="b": draw_building_anim(screen,overlay,obj,world._tick)
             elif kind=="r": draw_resource_anim(screen,overlay,obj)
-            elif kind=="a": draw_agent_anim(screen,overlay,obj,selected,world._tick,world,warn_surf,font_s)
+            elif kind=="t": draw_prop(screen,overlay,obj,world._tick)
+            elif kind=="a": draw_agent_anim(screen,overlay,obj,selected,world._tick,world,warn_surf,font_s,
+                    allow_bubble=(obj.aid in _bub_ok))
             else:
                 gxp,gyp=grid_ground(obj.pos.x,obj.pos.y)
                 pygame.draw.ellipse(screen,(0,0,0),(gxp-15,gyp+2,30,9))
