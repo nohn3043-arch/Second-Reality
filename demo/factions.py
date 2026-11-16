@@ -486,8 +486,9 @@ def _build_ctx(player, world, fkey, tpl, now) -> Dict[str, Any]:
         cands = [a for a in world.agents
                  if a.alive and a.aid != player.pid]
         if cands:
-            t = min(cands, key=lambda a: (round(
-                math.hypot(a.pos.x - px, a.pos.y - py), 4), a.aid))
+            # 同门切磋选最低阶对手：位阶防御（1+0.5×职阶档）下保证任务可完成
+            t = min(cands, key=lambda a: ((getattr(a, "vocation_tier", 0) or 0),
+                round(math.hypot(a.pos.x - px, a.pos.y - py), 4), a.aid))
             ctx["npc_aid"] = t.aid
             ctx["opponent_name"] = _npc_display(t)
         else:

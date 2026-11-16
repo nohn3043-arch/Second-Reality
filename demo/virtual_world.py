@@ -1029,9 +1029,13 @@ class NohnWorld:
             if attacker.mana < sk["cost"]: return None
             attacker.mana-=sk["cost"]
         def _def_rank(a):
-            return getattr(a,"body_rank",1) or 1
+            r=getattr(a,"body_rank",None)
+            if r: return r
+            return 1+0.5*(getattr(a,"vocation_tier",0) or 0)   # 居民位阶派生：1+0.5×职阶档
+        def _def_tier(a):
+            return (getattr(a,"vocation_tier",0) or 0)
         dmg=round(sk["power"]/(1.0+0.12*_def_rank(defender)))
-        counter=round(10.0/(1.0+0.12*_def_rank(attacker)))   # NPC 默认一阶武技还手
+        counter=round((10.0+3.0*_def_tier(defender))/(1.0+0.12*_def_rank(attacker)))   # 居民按职阶档还手
         _apply_hit(defender,dmg); _apply_hit(attacker,counter)
         healed=round(dmg*attacker.vocation_effects.get("blood_drain",0.0))
         if healed>0:
@@ -1048,6 +1052,8 @@ class NohnWorld:
             data={"skill":sk["name"],"track":sk["track"],"dmg":dmg,
                   "counter":counter,"win":win,"bounty":bounty,"healed":healed,
                   "via":"player" if attacker.pid=="PLAYER" else "sim"})
+        defender.memory.remember("与 %s 切磋，我%s"%(getattr(attacker,"name",None) or attacker.pid,"落败" if win else "获胜"),
+                                 0.5,"rivalry",["duel"])   # 战斗入社交记忆（记仇/记谊）
         self.event_log.append(_ev); self._record_event(_ev)
         return {"dmg":dmg,"counter":counter,"win":win,"bounty":bounty,
                 "healed":healed,"skill":sk["name"]}
@@ -1537,6 +1543,18 @@ def precompute_era(era_key,seed,config=None,snapshot_dir=".world_data/snapshots"
     for _ in range(target_tick): world.tick()
     with open(fp,'wb') as f: pickle.dump(world,f)
     return world
+
+def _replenish_era_population(world):
+    """世代补齐（演示层设定）：纪元快进后把存活居民补齐到开局规模。
+    世界观未定义纪元间人口史——新居民按正常降生流程生成（职阶/元素照常抽签），
+    年龄 18-40 均布（视为该纪元迁入的新一代）。只影响演示开局体验，不触宪法层。"""
+    target=getattr(world.config,"initial_agents",30)
+    if len([a for a in world.agents if a.alive])>=target: return 0
+    added=0
+    while len([a for a in world.agents if a.alive])<target and added<=target*2:
+        world._spawn_agent(age=18+int(world._rng.random()*23))
+        added+=1
+    return added
 
 # ============================================================
 # ============================================================
@@ -2368,7 +2386,7 @@ def run_era_selection(seed=0):
         screen.blit(fs.render("↑↓←→ 选择  ·  Enter 确认  ·  ESC 跳过(默认当下)",True,pal_hint),(SX,SH-28))
         pygame.display.flip(); clock.tick(30)
 
-def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, config=None,
+def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_tick=0, config=None,
             auto_story=False, fullscreen=False):
     global WW,WH,MAP_W,MAP_H,PANEL_W,STATS_H    # 布局随窗口尺寸重算（HUD 读的是这几个）
     import pygame
@@ -2434,6 +2452,12 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
     import goal_system as goal_mod
     import factions as story_mod
     world=story_mod.StoryWorld(config)   # 目标层+剧情层随 tick 自动步进（M2.6/M2.7）
+    if start_tick>0:                     # 纪元开局：快进至纪元 start_tick（纪元=已演化的世界状态）
+        print("[era] 纪元预演：快进 %d tick（一次性成本，以已演化世界状态开局）…"%start_tick)
+        for _ in range(start_tick): world.tick()
+        _rp=_replenish_era_population(world)   # 世代补齐：新迁入一代补至开局规模
+        print("[era] 预演完成：tick=%d 存活居民=%d（世代补齐 +%d）"%(
+            world._tick,len([a for a in world.agents if a.alive]),_rp))
     player=world.add_player()
     player.facing=math.pi/2                  # 初始面朝下（像素小人四向）
     player_walk_phase=0.0
@@ -3039,7 +3063,10 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
         pygame.image.save(screen,shot); print("Screenshot saved: "+shot)
     def _act_reset():
         nonlocal world,player,selected,story_menu
-        world=story_mod.StoryWorld(config); player=world.add_player()
+        world=story_mod.StoryWorld(config)
+        for _ in range(start_tick): world.tick()   # 重开回同纪元（与启动口径一致）
+        _replenish_era_population(world)           # 世代补齐（重开同口径）
+        player=world.add_player()
         selected=None; fx.clear(); feed.clear(); story_menu=None
     def _act_help():
         nonlocal help_dialog
@@ -3084,10 +3111,11 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
         player.action_mode="trade" if player.action_mode!="trade" else "observe"
 
     KEYBINDS=[  # (action_id, 键标签, pygame 键|None, 说明, 类别, 动作)
+        ("move","WASD/方向键",None,"移动（长按）","基础",None),
         ("pause","SPACE",pygame.K_SPACE,"暂停 / 继续","基础",_act_pause),
         ("speed_up","+",pygame.K_EQUALS,"加速","基础",_act_speed_up),
         ("speed_down","-",pygame.K_MINUS,"减速","基础",_act_speed_down),
-        ("save","S",pygame.K_s,"存档","基础",_act_save),
+        ("save","F6",pygame.K_F6,"存档","基础",_act_save),
         ("shot","P",pygame.K_p,"截图保存","基础",_act_shot),
         ("reset","F5",pygame.K_F5,"重开新世界","基础",_act_reset),
         ("help","H",pygame.K_h,"按键 / 设置弹窗","基础",_act_help),
@@ -3095,7 +3123,7 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
         ("fit","0",pygame.K_0,"复位视角（自适应 + 回角色）","视角",_act_fit),
         ("zoom_out","Z",pygame.K_z,"缩小","视角",_act_zoom_out),
         ("zoom_in","X",pygame.K_x,"放大","视角",_act_zoom_in),
-        ("heat","W",pygame.K_w,"热力图开关","显示",_act_heat),
+        ("heat","I",pygame.K_i,"热力图开关","显示",_act_heat),
         ("graph","F",pygame.K_f,"曲线图开关","显示",_act_graph),
         ("eventfx","V",pygame.K_v,"事件浮字开关","显示",_act_eventfx),
         ("daynight","N",pygame.K_n,"昼夜色调开关","显示",_act_daynight),
@@ -3206,7 +3234,7 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
         if help_tab=="keys":
             screen.blit(font_s.render("←/→ 切换到设置页；设置页可改键",
                         True,PAL["text_dim"]),(r.x+140,r.y+18))
-            rows=[(lab,desc) for a,lab,k,desc,c,h in KEYBINDS if k is not None]
+            rows=[(lab,desc) for a,lab,k,desc,c,h in KEYBINDS]
             rows.append(("鼠标","点击采集 · 拖拽平移 · 滚轮缩放"))
             rows.append(("面板滚轮","滚动右栏"))
             _yb=r.y+50; _colw=(r.w-40)//2
@@ -3246,10 +3274,11 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
             for a,k in (settings.get("keybinds") or {}).items():
                 if k is not None: _cur[a]=int(k)
             scroll_top=y
-            max_scroll=max(0,len(KEYBINDS)*24+34-(r.bottom-20-scroll_top))
+            _bindable=[b for b in KEYBINDS if b[2] is not None]
+            max_scroll=max(0,len(_bindable)*24+34-(r.bottom-20-scroll_top))
             settings_scroll=max(0,min(settings_scroll,max_scroll))
             y-=settings_scroll
-            for a,lab,k0,d,c,h in KEYBINDS:
+            for a,lab,k0,d,c,h in _bindable:
                 if y>r.bottom-14 or y<scroll_top-24:
                     y+=24; continue
                 row=pygame.Rect(r.x+20,y,r.w-40,22)
@@ -3603,8 +3632,10 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
                     cam_x=drag[2]-_dx/zoom; cam_y=drag[3]-_dy/zoom
                     _clamp_cam()
         keys=pygame.key.get_pressed()
-        dx=(1 if keys[pygame.K_RIGHT] else 0)-(1 if keys[pygame.K_LEFT] else 0)
-        dy=(1 if keys[pygame.K_DOWN] else 0)-(1 if keys[pygame.K_UP] else 0)
+        dx=((1 if keys[pygame.K_RIGHT] or keys[pygame.K_d] else 0)
+            -(1 if keys[pygame.K_LEFT] or keys[pygame.K_a] else 0))
+        dy=((1 if keys[pygame.K_DOWN] or keys[pygame.K_s] else 0)
+            -(1 if keys[pygame.K_UP] or keys[pygame.K_w] else 0))
         if story_menu is not None or help_dialog or ctx_menu is not None:
             dx=dy=0          # 弹窗/菜单态：封锁方向键移动（W/S 在菜单里是导航）
         if dx!=0 or dy!=0:
@@ -3664,9 +3695,11 @@ def _print_demo_note(cfg):
               "       人口密度过高会导致饥荒，请同时放大 --world-size。"
               % (note["requested_resources"],note["resource_cap"]))
 
-def run_headless(ticks=1000, verbose=False, seed=0, config=None):
+def run_headless(ticks=1000, verbose=False, seed=0, config=None, start_tick=0):
     config=config or WorldConfig(world_size=60,initial_agents=30,initial_resources=80,initial_buildings=8,seed=seed)
     world=NohnWorld(config)
+    for _ in range(start_tick): world.tick()      # 纪元开局：快进至纪元 start_tick
+    _replenish_era_population(world)              # 世代补齐（headless 同口径）
     t0=time.time()
     for i in range(ticks):
         world.tick()
@@ -3740,6 +3773,9 @@ if __name__=="__main__":
     ap.add_argument("--headless",action="store_true",help="run without GUI")
     ap.add_argument("--ticks",type=int,default=1000,help="ticks to simulate (headless / determinism / screenshot)")
     ap.add_argument("--seed",type=int,default=0,help="world RNG seed; same seed + same config => reproducible")
+    ap.add_argument("--era",metavar="KEY",default=None,
+        help="开局纪元 key（genesis/theocracy/schism/academy/mingyir/ayyas/alpha_dawn/present）。"
+             "纪元=快进至该纪元 start_tick 的已演化世界；GUI 未指定时先弹纪元选择界面")
     ap.add_argument("--metrics",action="store_true",
         help="print machine-readable simulation self-metrics (NOT the constitutional 25-dim audit)")
     ap.add_argument("--verify-determinism",action="store_true",
@@ -3777,15 +3813,25 @@ if __name__=="__main__":
     if args.verify_determinism:
         raise SystemExit(0 if verify_determinism(ticks=args.ticks,seed=args.seed,
             agents=args.agents,world_size=args.world_size) else 1)
+    if args.era is not None and EraCalendar.get_era(args.era) is None:
+        raise SystemExit("未知纪元：%s（可选：%s）"%(
+            args.era,",".join(e["key"] for e in EraCalendar.ERAS)))
     if args.screenshot:
         os.environ.setdefault("SDL_VIDEODRIVER","dummy")   # 必须在 pygame.init() 之前设置
         if args.window: os.environ["SRDEMO_WINDOW"]=args.window
         run_gui(tps=args.tps,seed=args.seed,max_ticks=args.ticks,screenshot=args.screenshot,config=demo_cfg,
-                auto_story=args.auto_story)
+                auto_story=args.auto_story,
+                start_tick=EraCalendar.get_era(args.era)["start_tick"] if args.era else 0)
         raise SystemExit(0)
     _print_demo_note(demo_cfg)
     if args.window: os.environ["SRDEMO_WINDOW"]=args.window
-    world=run_headless(args.ticks,verbose=True,seed=args.seed,config=demo_cfg) if args.headless else run_gui(tps=args.tps,seed=args.seed,config=demo_cfg,fullscreen=args.fullscreen)
+    if args.headless:
+        world=run_headless(args.ticks,verbose=True,seed=args.seed,config=demo_cfg,
+                           start_tick=EraCalendar.get_era(args.era)["start_tick"] if args.era else 0)
+    else:
+        _era=args.era or run_era_selection(seed=args.seed)   # GUI 未指定纪元 → 先弹选择界面
+        world=run_gui(tps=args.tps,seed=args.seed,config=demo_cfg,fullscreen=args.fullscreen,
+                      start_tick=EraCalendar.get_era(_era)["start_tick"])
     if args.metrics:
         print(json.dumps(world.get_simulation_metrics(),ensure_ascii=False,indent=2,default=str))
     if args.audit:
