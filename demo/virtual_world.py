@@ -2359,9 +2359,10 @@ def draw_speech_bubble(screen,font,x,y,text):
     pygame.draw.line(screen,PAL["ink"],(x+4,by+bh-1),(x,by+bh+4),1)
     screen.blit(font.render(text,True,(40,36,48)),(bx+6,by+2))
 
-def draw_agent_anim(screen,overlay,a,selected,tick,world,warn_surf,font=None,allow_bubble=True):
+def draw_agent_anim(screen,overlay,a,selected,tick,world,warn_surf,font=None,allow_bubble=True,
+        render_xy=None,tick_f=None):
     gx,gy=a.pos.x,a.pos.y
-    gxp,gyp=grid_ground(gx,gy)
+    gxp,gyp=grid_ground(*(render_xy if render_xy is not None else (gx,gy)))
     if not a.alive:
         _draw_shadow(overlay,gxp,gyp,12,4)
         pygame.draw.rect(screen,(120,124,138),(gxp-6,gyp-9,12,9),border_radius=3)
@@ -2376,14 +2377,16 @@ def draw_agent_anim(screen,overlay,a,selected,tick,world,warn_surf,font=None,all
     # 坎公风像素小人：四向行走 / 弹跳步态 / 厚描边（pixel_sprites 渲染，含阴影）。
     # NPC 行走相位由 tick+坐标派生（确定性，不消耗 RNG）；朝向由移动向量维护。
     # 一倍速步态：每 tick 走 1 格，相位 +0.5/tick（2 格一个完整步态周期），腿频与位移匹配。
-    _moving = (state == "working")
+    _mvv = render_xy is not None and (abs(render_xy[0]-a.fx)>1e-6 or abs(render_xy[1]-a.fy)>1e-6)
+    _moving = _mvv or (state == "working")
+    _tf = tick if tick_f is None else tick_f          # 连续仿真时间：1 格一个步态周期，与位移同步
     _spr=NPC_SPR.get(agent_skin_key(a.aid,_vv)) if NPC_SPR else None
     if _spr is not None:
-        _top=draw_agent_skin(screen,overlay,gxp,gyp,_spr,tick,_moving,getattr(a,"element",None))
+        _top=draw_agent_skin(screen,overlay,gxp,gyp,_spr,_tf,_moving,getattr(a,"element",None))
     else:
         pspr.draw_chibi(screen, overlay, gxp, gyp, cloth=cloth, hair=hair,
             direction=getattr(a, "facing", "down"),
-            phase=((tick * 0.5) + ((abs(gx) * 31 + gy) % 7) * 0.09) % 1.0 if _moving else 0.0,
+            phase=((_tf * 1.0) + ((abs(gx) * 31 + gy) % 7) * 0.09) % 1.0 if _moving else 0.0,
             state=state, idle_t=tick, hero=False,
             badge=pspr.faction_badge(getattr(a, "faction", None)) if _vv else None,
             aura=pspr.ELEMENT_AURA.get(getattr(a, "element", None)),
@@ -2558,6 +2561,8 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
     build_mode=False; build_type="house"
     running=True; paused=False; speed=tps; selected=None
     _acc=0.0                           # 固定步长积分器：1 真实秒 = 1 sim tick（speed 倍速）
+    _prev_pos={}                       # sim tick 前位置快照（渲染插值用）
+    render_frac=0.0                    # 当前 tick 内插值进度 0..1
     help_dialog=False; help_tab="keys"                 # 按键/设置弹窗（H/F1 或右上按钮）
     ctx_menu=None; ctx_sel=0                           # 上下文交互菜单（E 键）
     rebind_action=None; settings_scroll=0              # 键位重绑定捕获 / 设置列表滚动
@@ -2700,9 +2705,9 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
             elif kind=="t": draw_prop(screen,overlay,obj,world._tick)
             elif kind=="c": draw_lore_npc(screen,obj,world._tick,font_s)
             elif kind=="a": draw_agent_anim(screen,overlay,obj,selected,world._tick,world,warn_surf,font_s,
-                    allow_bubble=(obj.aid in _bub_ok))
+                    allow_bubble=(obj.aid in _bub_ok),render_xy=_render_xy(obj),tick_f=world._tick+render_frac)
             else:
-                gxp,gyp=grid_ground(obj.pos.x,obj.pos.y)
+                gxp,gyp=grid_ground(*_render_xy(obj))
                 pygame.draw.ellipse(screen,(0,0,0),(gxp-15,gyp+2,30,9))
                 # 无主角：玩家与居民同一渲染路径；职阶配色+势力徽章+元素光环
                 pdir=pspr.dir_from_vector(math.cos(player.facing),math.sin(player.facing))
@@ -2710,11 +2715,11 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
                 _pfac=getattr(getattr(_peng,"state",None),"faction",None) if _peng else None
                 _pspr=NPC_SPR.get(agent_skin_key(getattr(player,"aid","player"),player.vocation)) if NPC_SPR else None
                 if _pspr is not None:
-                    draw_agent_skin(screen,overlay,gxp,gyp,_pspr,world._tick,bool(player_walk_phase),player.element)
+                    draw_agent_skin(screen,overlay,gxp,gyp,_pspr,world._tick+render_frac,bool(player_walk_phase),player.element)
                 else:
                     pspr.draw_chibi(screen,overlay,gxp,gyp,
                         cloth=pspr.vocation_cloth(player.vocation),hair=(110,84,60),
-                        direction=pdir,phase=player_walk_phase,state="idle",
+                        direction=pdir,phase=(player_walk_phase+render_frac*0.5)%1.0,state="idle",
                         idle_t=world._tick,hero=False,
                         badge=pspr.faction_badge(_pfac),
                         aura=pspr.ELEMENT_AURA.get(player.element),
@@ -3280,6 +3285,14 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
         elif key=="goals": show_goals=bool(val)
         elif key=="helpbar": show_helpbar=bool(val)
         elif key=="speed": speed=int(val)
+    def _render_xy(a):
+        """渲染坐标：前后 sim tick 位置按积分进度插值（消除 1tps 的瞬移感）。
+        位移超过 2 格（降生/世代补齐/重开）不插值，直接落位。"""
+        pv=_prev_pos.get(getattr(a,"aid",""))
+        if pv is None: return a.fx,a.fy
+        _dx=a.fx-pv[0]; _dy=a.fy-pv[1]
+        if abs(_dx)>2 or abs(_dy)>2: return a.fx,a.fy
+        return pv[0]+_dx*render_frac, pv[1]+_dy*render_frac
     def _help_btn_rect():
         return pygame.Rect(MAP_W-110,10,100,26)
     def _help_dlg_rect():
@@ -3774,6 +3787,9 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
         _sim=0
         while _acc>=_need and running and _sim<=speed*2+2:   # 掉帧上限，防螺旋追赶
             _acc-=_need; _sim+=1
+            _prev_pos[player.pid]=(player.fx,player.fy)
+            for _aa in world.agents:
+                if _aa.alive: _prev_pos[_aa.aid]=(_aa.fx,_aa.fy)
             if dx!=0 or dy!=0:
                 player.move(dx,dy,world.size)
                 player_walk_phase=(player_walk_phase+0.5)%1.0   # 每 sim tick 半步：1 格/秒步行节奏
@@ -3794,6 +3810,7 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
                             spawn_fx(int(round(player.fx)),int(round(player.fy)),"✓",(130,255,160))
             if max_ticks and world._tick>=max_ticks: running=False
         if _sim>2: _acc=0.0                        # 积压丢弃（实时语义，不螺旋追赶）
+        render_frac=min(1.0,max(0.0,_acc/_need)) if not paused else 0.0
         for f in fx: f["age"]+=1
         fx=[f for f in fx if f["age"]<f["ttl"]]
         render_frame(with_tooltip=True)
