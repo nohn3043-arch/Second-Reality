@@ -180,8 +180,11 @@ class RealEconomyView:
 
     # ---- 双守恒口径 ----
     def conservation_residual(self):
-        """记账式守恒残差（demo 口径）：Σwealth+treasury+inflation+unallocated==supply。"""
-        return self._book.invariant_residual(self.world.agents)
+        """记账式守恒残差（demo 口径）：Σwealth+treasury+inflation+unallocated==supply。
+        居民化（无主角）：玩家账户与其他居民一同纳入求和——玩家同领 UBI、同缴税，
+        这些流都真实入账，漏掉玩家反而会得出假残差。"""
+        accts = self.world.agents + ([self.world.player] if self.world.player else [])
+        return self._book.invariant_residual(accts)
 
     def conservation_holds(self):
         return abs(self.conservation_residual()) <= NOHN_LAW_AXIOMS["conservation_tolerance"]
@@ -566,6 +569,44 @@ class RealWorld(NohnWorld):
         if changed:
             self.peg._sync_asset(COIN_ID)
         self._peg_mirrored = asset["total_supply"]
+
+
+class RealStoryWorld(RealWorld):
+    """真栈世界全栈装配（M2.6/M2.7）：RealWorld + 涌现目标层 + 剧情层。
+
+    纯增量，三项纪律与 demo/goal_system.py、demo/factions.py 同一口径：
+      1) 零世界 RNG：NPC 身份化用 (seed, aid) 派生流；两层引擎全确定性排序；
+      2) 零账本写入：目标/剧情均为派生态（不入 export_state/state_hash）；
+      3) 25 维宪法审计不变（tools/goal_system_smoke.py 断言）。
+    注意：goal_system / factions 以顶层名导入——与本文件 `import virtual_world`
+    同一模块族，EventType 等枚举比对保持同一身份（模块身份纪律）。"""
+
+    def __init__(self, config=None, goal_config=None, **kw):
+        super().__init__(config, **kw)
+        self.goal_config = goal_config
+        self.goal_generator = None
+        self.last_goal_transitions = []
+        self.story_engine = None
+        self.last_story_transitions = []
+        import factions as _story_mod
+        for _a in self.agents:
+            _story_mod.assign_npc_identity(_a, self.config.seed)
+
+    def add_player(self, pid: str = "PLAYER"):
+        import goal_system as _goal_mod
+        import factions as _story_mod
+        _p = super().add_player(pid)
+        self.goal_generator = _goal_mod.GoalGenerator(_p, self, self.goal_config)
+        self.story_engine = _story_mod.StoryEngine(_p, self)
+        return _p
+
+    def tick(self):
+        _te = super().tick()
+        if self.goal_generator is not None and self.player is not None:
+            self.last_goal_transitions = self.goal_generator.step(self)
+        if self.story_engine is not None and self.player is not None:
+            self.last_story_transitions = self.story_engine.step(self)
+        return _te
 
 
 class _ApiFacade:

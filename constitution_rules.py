@@ -452,9 +452,25 @@ class ImmutableWorldRule:
             "gravity": NOHN_LAW_AXIOMS["gravity"],
             "time_dilation": NOHN_LAW_AXIOMS["time_dilation"],
             "unit_scale": NOHN_LAW_AXIOMS["unit_scale"],
+            # 八元素反应表（水/光/木/雷/暗/地/风/火）——与 demo/virtual_world.py
+            # 保持同一集合；constitution 层只是创世默认模板，正式世界由创建者注入。
             "element_reactions": {
-                ("fire", "water"): "evaporation",
-                ("fire", "electro"): "overload"
+                ("水", "火"): "evaporation",
+                ("水", "雷"): "conduction",
+                ("水", "地"): "silt",
+                ("水", "光"): "refraction",
+                ("水", "风"): "tide",
+                ("火", "木"): "conflagration",
+                ("火", "风"): "spread",
+                ("火", "暗"): "extinguish",
+                ("木", "暗"): "decay",
+                ("木", "地"): "rooting",
+                ("雷", "光"): "luminescence",
+                ("雷", "地"): "grounding",
+                ("雷", "暗"): "discharge",
+                ("光", "暗"): "obscuration",
+                ("地", "风"): "erosion",
+                ("地", "暗"): "concealment",
             }
         }
         self.physics_constants = physics_constants if physics_constants else defaults

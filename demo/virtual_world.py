@@ -23,7 +23,7 @@ Aligned with system/ layer: 5-layer needs + memory + compliant economy + perceiv
   - 全局确定性：所有随机数统一走 NohnWorld._rng（由 WorldConfig.seed 播种）。
     同一 (config, seed) => 世界状态逐字节可复现，可用 NohnWorld.state_hash() 取证。
 """
-import random, math, time, json, hashlib, os, sys
+import random, math, time, json, hashlib, os, sys, zlib
 from dataclasses import dataclass, field, asdict
 from typing import Any, List, Dict, Tuple, Optional
 from enum import Enum
@@ -46,6 +46,15 @@ from constitution_rules import (   # noqa: E402
     SoulAttestation, SoulLedger, MemoryInalienability, WorldPerpetuity,
     MandatoryInteroperability, DecentralizationGovernance,
 )
+
+# 坎公风像素小人渲染器（纯观察者；pygame 懒加载，headless 不引入依赖）
+import pixel_sprites as pspr   # noqa: E402
+
+# 职阶库 / 魔力特性库（纯数据模块，登录抽签唯一权威源）
+try:                                                          # noqa: E402
+    from . import vocations as voc                             # noqa: E402
+except ImportError:                                            # pragma: no cover
+    import vocations as voc                                    # noqa: E402
 
 FIVE_LAYER_NEEDS = ["physiology","safety","belonging","esteem","self_actualization"]
 NEED_LABELS_CN = ["生理","安全","归属","尊重","自我实现"]
@@ -231,6 +240,10 @@ class NohnAgent:
     children_ids:List[str]=field(default_factory=list); friends:List[str]=field(default_factory=list)
     reputation:float=50.0; knowledge:float=10.0; creativity:float=5.0
     violations:int=0; last_ubi_tick:int=0
+    # 八元素（一切生灵所禀，人人有）+ 魔力特性（稀有觉醒，不分级）。
+    # 与世界观【元素生存法则】一致：元素是固有属性，特性是额外的稀有能力，两者分离。
+    element:Optional[str]=None; element_note:Optional[str]=None
+    affinity:Optional[str]=None; affinity_text:Optional[str]=None
     _perceived:List[dict]=field(default_factory=list,repr=False)
     # 拟人心理层：persona=引擎实例，affect=其可读标量视图。
     # 两者均不进入 to_dict()，故不改变世界状态哈希（人格层是派生态，不是账本态）。
@@ -238,6 +251,9 @@ class NohnAgent:
     affect:Dict[str,float]=field(default_factory=dict,repr=False,compare=False)
     # stack = persona/feature 六模块实例（身份/目标/价值观/偏见/世界信念/语言人格）
     stack:Optional[Any]=field(default=None,repr=False,compare=False)
+    # 视觉朝向（四向像素小人渲染用）：派生态，不入 to_dict()/state_hash()
+    # （与 persona 同一口径：账本态之外的视觉派生，不破坏世界可复现性）
+    facing:str=field(default="down",compare=False,repr=False)
 
     def perceive(self, world):
         # 空间索引邻域查询，结果与全量扫描的顺序完全一致（按对象在各自列表中的
@@ -440,13 +456,17 @@ class NohnAgent:
     def _move_toward(self,tx,ty,world):
         dx,dy=tx-self.pos.x,ty-self.pos.y; d=math.hypot(dx,dy)
         if d>0:
-            s=min(1.0,d); self.pos.x+=int(round(dx/d*s)); self.pos.y+=int(round(dy/d*s))
+            s=min(1.0,d)
+            self.facing=pspr.dir_from_vector(dx,dy)   # 视觉朝向（不消耗 RNG、不入账本）
+            self.pos.x+=int(round(dx/d*s)); self.pos.y+=int(round(dy/d*s))
         self.pos.x=max(0,min(world.size-1,self.pos.x)); self.pos.y=max(0,min(world.size-1,self.pos.y))
         world._touch_agent(self)   # 维护空间索引：移动后必须重新归档，否则邻域查询会漏人
     def _wander(self,world):
         rng=world._rng
-        self.pos.x=max(0,min(world.size-1,self.pos.x+rng.choice([-1,0,1])))
-        self.pos.y=max(0,min(world.size-1,self.pos.y+rng.choice([-1,0,1])))
+        _wx=rng.choice([-1,0,1]); _wy=rng.choice([-1,0,1])   # 抽签次数/顺序与旧实现一致，随机流不变
+        self.pos.x=max(0,min(world.size-1,self.pos.x+_wx))
+        self.pos.y=max(0,min(world.size-1,self.pos.y+_wy))
+        if _wx or _wy: self.facing=pspr.dir_from_vector(_wx,_wy)
         world._touch_agent(self)
     def _is_scripted(self):
         """第四条·无强制剧情：本智能体的行为由需求 + 人格 + 记忆现场决策
@@ -513,6 +533,17 @@ class PlayerAgent:
         self.action_mode="observe"
         self.facing=0
         self.violations=0
+        # —— 居民化（无主角）+ 登录抽签（世界观·职阶与魔力特性）——
+        self.age=18                        # 成年居民降生，随世界年份增长
+        self.vocation=None; self.vocation_effects={}
+        self.vocation_tier=None; self.affinity_tier=None; self.affinity_text=None
+        # 八元素：一切生灵所禀的固有属性（人人有），非魔力特性。
+        # 权威来源：世界观【元素生存法则】。字段与 affinity 严格分离。
+        self.element=None; self.element_note=None
+        self.affinity=None                 # 魔力特性：稀有觉醒（demo/vocations.py，不分级）
+        self.magic_rank=1; self.magic_xp=0.0    # 法阶 1-10（学徒→半神）
+        self.body_rank=1;  self.body_xp=0.0     # 剑阶/体阶 1-10（剑士→半神）
+        self.soul_strength=1; self.soul_xp=0.0  # 灵魂强度（魔核→灵魂）
     @property
     def pos(self):
         return Position(int(round(self.fx)),int(round(self.fy)))
@@ -524,49 +555,152 @@ class PlayerAgent:
         gx,gy=int(round(self.fx)),int(round(self.fy))
         for r in world.resources:
             if r["pos"]==(gx,gy) and r["amount"]>0:
+                _e=self.vocation_effects
                 g=min(3,r["amount"])
+                g=int(round(g*(1.0+_e.get("gather_bonus",0.0)
+                    +(_e.get("herb_bonus",0.0) if r["type"]=="herb" else 0.0))))
                 self.inventory[r["type"]]=self.inventory.get(r["type"],0)+g
                 world.consume_resource(gx,gy,g)
                 if r["type"] in ("food","water","fruit"):
-                    self.needs["physiology"]=min(100,self.needs["physiology"]+25)
-                self.energy-=2
+                    self.needs["physiology"]=min(100,self.needs["physiology"]+25*(1.0+_e.get("regen_bonus",0.0)))
+                self.energy=max(0.0,self.energy-2*(1.0-_e.get("energy_cost",0.0)))   # 风/巡夜：省力
+                self.gain_xp("body",2)          # 三成长·体能：采集炼体
                 return r["type"],g
         return None,0
     def build(self, world, btype="house"):
         gx,gy=int(round(self.fx)),int(round(self.fy))
         for b in world.buildings:
             if b["pos"]==(gx,gy): return False
-        if self.wealth<100: return False
-        self.wealth-=100; world.reserve.collect_fee(100)
+        cost=int(round(100*(1.0-self.vocation_effects.get("build_bonus",0.0))))   # 铁匠：建造-10%
+        if self.wealth<cost: return False
+        self.wealth-=cost; world.reserve.collect_fee(cost)
         world.buildings.append({"type":btype,"pos":(gx,gy),"owner":self.pid,"age":0})
         self.owned_buildings.append((gx,gy))
         self.needs["safety"]=min(100,self.needs["safety"]+15)
+        self.gain_xp("body",10)              # 三成长·体能：营造炼体
         return True
     def trade(self, npc, world):
         if not npc or not npc.alive or not npc.inventory: return None
         rng=world._rng
         rt=rng.choice(sorted(npc.inventory.keys()))
         price=rng.randint(5,20)
+        price=max(1,int(round(price*(1.0-self.vocation_effects.get("trade_bonus",0.0)))))   # 商人：交易-10%
         if self.wealth>=price:
             self.wealth-=price; npc.wealth+=price
             self.inventory[rt]=self.inventory.get(rt,0)+1; npc.inventory[rt]-=1
             if npc.inventory[rt]<=0: del npc.inventory[rt]
             self.needs["esteem"]=min(100,self.needs["esteem"]+3)
+            self.gain_xp("soul",1)           # 三成长·灵魂：交往
+            # M2.6（goal_system）：玩家交易入事件流并登记因果图——原先玩家交易
+            # 对世界不可见，涌现式目标的事件源判据（完成交易/好友网络）无法复算。
+            _ev=Event(eid=world.next_eid(),etype=EventType.TRADE,actor=self.pid,
+                target=npc.aid,tick=world._tick,data={"res":rt,"price":price,"via":"player"})
+            world.event_log.append(_ev); world._record_event(_ev)
             return rt,price
         return None
+    def create_work(self, world, title, data=None):
+        """M2.6（goal_system）：玩家创造作品——登记 CAS 资产 + 记 PRODUCE 事件。
+        消耗库存首件（字典序，确定性）作为材料，energy-5，self_actualization+8。
+        库存为空则失败返回 None。供涌现式目标 create_work 的完成判据消费。"""
+        if not self.inventory: return None
+        _mat=sorted(self.inventory.keys())[0]
+        self.inventory[_mat]-=1
+        if self.inventory[_mat]<=0: del self.inventory[_mat]
+        self.energy=max(0.0,self.energy-5)
+        self.needs["self_actualization"]=min(100.0,self.needs["self_actualization"]+8)
+        self.gain_xp("magic",8)             # 三成长·魔力：创作凝练魔核
+        _aid=None; _chash=None
+        if getattr(world,"assets",None) is not None:
+            _aid,_chash=world.assets.register("work",self.pid,
+                {"title":title,"creator":self.pid,"tick":world._tick,
+                 "material":_mat,"data":data or {}})
+        _ev=Event(eid=world.next_eid(),etype=EventType.PRODUCE,actor=self.pid,
+            tick=world._tick,data={"asset_id":_aid,"title":title,"material":_mat})
+        world.event_log.append(_ev); world._record_event(_ev)
+        return _aid,_chash
     def rest(self):
-        self.energy=min(100,self.energy+10)
-        self.needs["safety"]=min(100,self.needs["safety"]+3)
+        _bd=self.vocation_effects.get("blood_drain",0.0)   # 吸血：以血补元
+        self.energy=min(100,self.energy+10*(1.0+self.vocation_effects.get("rest_bonus",0.0)+_bd))
+        self.needs["safety"]=min(100,self.needs["safety"]+3+2*_bd)
     def tick(self, world):
+        _e=self.vocation_effects
+        _dr=1.0-_e.get("needs_resist",0.0)   # 冰/牧人/守林人：需求衰减减缓
         for n in self.needs:
-            self.needs[n]=max(0,self.needs[n]-NEED_DECAY.get(n,0.3)*0.5)
+            self.needs[n]=max(0,self.needs[n]-NEED_DECAY.get(n,0.3)*0.5*_dr)
         if self.energy<15: self.needs["safety"]-=5
-        self.energy=max(0,self.energy-0.5)
+        self.energy=max(0,self.energy-0.5*(1.0-_e.get("energy_cost",0.0)))
     def to_dict(self):
         return {"pid":self.pid,"fx":round(self.fx,2),"fy":round(self.fy,2),
             "wealth":self.wealth,"energy":self.energy,"needs":self.needs,
             "inventory":self.inventory,"owned_buildings":self.owned_buildings,
-            "action_mode":self.action_mode}
+            "action_mode":self.action_mode,"age":self.age,
+            "vocation":self.vocation,"affinity":self.affinity,
+            "element":self.element,
+            "magic_rank":self.magic_rank,"body_rank":self.body_rank,
+            "soul_strength":self.soul_strength}
+
+    # ---- 居民化：与其他居民同一套经济节拍（同领 UBI、同缴税）----
+    def receive_ubi(self,amt):
+        self.wealth+=amt
+    def pay_tax(self,amt):
+        amt=max(0.0,min(amt,self.wealth)); self.wealth-=amt; return amt
+
+    # ---- 登录抽签（=降生）：职阶 + 魔力特性 ----
+    # 池数据与稀有度唯一权威源：demo/vocations.py（51 职阶 5 档 + 14 特性 3 档）。
+    # 世界观：职阶降生即知；魔力特性十分之一概率觉醒。
+    MAGIC_TITLES={1:"学徒",2:"术士",3:"术士",4:"术师",5:"术师",6:"术师",7:"贤者",8:"圣者",9:"魔法帝",10:"半神"}
+    SWORD_TITLES={1:"剑士",2:"剑士",3:"剑士",4:"剑士",5:"剑士",6:"大师",7:"剑尊",8:"剑圣",9:"剑帝",10:"半神"}
+    RANK_XP=[0,40,120,240,400,600,840,1120,1440,1800]   # 达成 n 阶所需累计经验（1-10）
+
+    def birth_draw(self,rng):
+        """登录抽签=降生：先赋八元素（固有，人人有），再抽职阶（5 档稀有度），
+        最后掷魔力特性觉醒（稀有，不分级）；特性效果并入同一张加成表。
+        消费注入的 world._rng——同 seed 同抽签，世界可复现（确定性纪律）。"""
+        self.element=voc.draw_element(rng)
+        self.element_note=voc.ELEMENT_NOTES.get(self.element)
+        e=voc.draw_vocation(rng)
+        self.vocation=e["name"]; self.vocation_tier=e["tier"]
+        self.vocation_effects=dict(e["effects"])
+        aff=voc.draw_affinity(rng)
+        if aff is not None:
+            self.affinity=aff["name"]; self.affinity_tier=aff["tier"]
+            self.affinity_text=aff["text"]
+            for _k,_v in aff["effects"].items():      # 特性效果并入同一张加成表
+                self.vocation_effects[_k]=self.vocation_effects.get(_k,0.0)+_v
+        self.speed=0.3*(1.0+self.vocation_effects.get("speed_bonus",0.0))   # 雷/风：移速
+
+    def _vocal(self,kind):
+        """职阶加成汇总（勇者全属性 all、成长速度 growth 叠加到每条）。"""
+        e=self.vocation_effects
+        return e.get(kind,0.0)+e.get("all",0.0)+e.get("growth",0.0)
+
+    def gain_xp(self,kind,amount):
+        """三成长：魔力/体能/灵魂强度。XP 来源全部是可复算的玩家行为
+        （采集/建造/创作/赠予/遗产/目标完成）；法阶与剑阶并行不悖
+        （世界观：体阶与法阶分隔，无强制绑定）。"""
+        amount=max(0.0,amount)*(1.0+self._vocal(kind))   # 职阶+特性效果已并入同一张加成表
+        if kind=="magic":
+            self.magic_xp+=amount
+            while self.magic_rank<10 and self.magic_xp>=self.RANK_XP[self.magic_rank]:
+                self.magic_rank+=1
+        elif kind=="body":
+            self.body_xp+=amount
+            while self.body_rank<10 and self.body_xp>=self.RANK_XP[self.body_rank]:
+                self.body_rank+=1
+        elif kind=="soul":
+            self.soul_xp+=amount
+            while self.soul_strength<10 and self.soul_xp>=self.RANK_XP[self.soul_strength]:
+                self.soul_strength+=1
+
+    def rank_title(self):
+        """位阶称谓（世界观位阶对照表）：法阶与剑阶并列展示，双路线同修。
+        前缀为八元素（固有属性），魔力特性另用「·特性名」标出（不分级）。"""
+        t="%d阶%s · %d阶%s"%(self.magic_rank,self.MAGIC_TITLES[self.magic_rank],
+                             self.body_rank,self.SWORD_TITLES[self.body_rank])
+        head=(self.element+"系") if self.element else ""
+        if self.affinity:
+            head=(head+"·"+self.affinity) if head else self.affinity
+        return (head+"｜"+t) if head else t
 
 # ============================================================
 # 宪法装配层：把规则层（constitution_rules）实例化并挂到世界对象上
@@ -661,7 +795,8 @@ class DemoEconomy:
         self.proof_of_reserve=True    # 真实：账目可复算（见 conservation_holds）
         self._ledger={}               # 无外部锚定资产，空账本
     def conservation_residual(self):
-        return self.reserve.invariant_residual(self.world.agents)
+        accts=self.world.agents+([self.world.player] if self.world.player else [])   # 居民化：玩家纳入守恒式
+        return self.reserve.invariant_residual(accts)
     def conservation_holds(self):
         """守恒式是否成立：容差取自 NOHN_LAW_AXIOMS 唯一权威源。"""
         return abs(self.conservation_residual())<=NOHN_LAW_AXIOMS["conservation_tolerance"]
@@ -733,6 +868,11 @@ class NohnWorld:
         self.player=None; self.assets=AssetRegistry()
     def add_player(self, pid="PLAYER"):
         self.player=PlayerAgent(pid=pid,world_size=self.size)
+        # 居民化（无主角）：初始财富从世界创世储备划转（其他居民同源同额 100，
+        # 行会商人等 wealth_start 职阶按倍率上浮）；玩家账户纳入守恒式。
+        self.player.birth_draw(self._rng)   # 先抽签（决定 wealth_start 等效果）
+        _start=int(round(100.0*(1.0+self.player.vocation_effects.get("wealth_start",0.0))))
+        self.player.wealth=self.reserve.allocate_genesis(float(_start))
         return self.player
     def _init_world(self):
         for _ in range(self.config.initial_resources): self._spawn_resource()
@@ -782,6 +922,13 @@ class NohnWorld:
         a=NohnAgent(aid=aid,name=name,pos=pos,generation=gen,age=age,
             personality=make_personality(rng),skills=make_skills(rng),
             wealth=0.0 if parent_ids else rng.uniform(50,150))
+        # 降生：先赋八元素（人人有），再掷魔力特性觉醒（稀有，不分级）。
+        # 与玩家 birth_draw 同序消费 world._rng，保证世界可复现。
+        a.element=voc.draw_element(rng)
+        a.element_note=voc.ELEMENT_NOTES.get(a.element)
+        _aff=voc.draw_affinity(rng)
+        if _aff is not None:
+            a.affinity=_aff["name"]; a.affinity_text=_aff["text"]
         if parent_ids:
             # 生育必须是纯转移：父母各付出 per_parent，子代收 per_parent*人数（原版父各扣20、子只收10，每胎蒸发10）
             per_parent=10.0
@@ -883,7 +1030,27 @@ class NohnWorld:
             "gravity":NOHN_LAW_AXIOMS["gravity"],
             "time_dilation":NOHN_LAW_AXIOMS["time_dilation"],
             "unit_scale":NOHN_LAW_AXIOMS["unit_scale"],
-            "element_reactions":{("fire","water"):"evaporation",("fire","electro"):"overload"},
+            # 元素反应表：键严格取八元素（水/光/木/雷/暗/地/风/火），
+            # 反应对由世界观【元素生存法则】所列物理链推导，不引入八元之外的标识。
+            # 旧表的 electro 属八元之外，已并入 雷→光（电致发光）。
+            "element_reactions":{
+                ("水","火"):"evaporation",       # 相变潜热·汽化
+                ("水","雷"):"conduction",        # 水导电·雷势蔓延
+                ("水","地"):"silt",              # 水流携土·淤积
+                ("水","光"):"refraction",        # 冰晶折射·光学隐形
+                ("水","风"):"tide",              # 水传声·气压驱动
+                ("火","木"):"conflagration",     # 木为可燃介质·火势自续
+                ("火","风"):"spread",            # 风助火势
+                ("火","暗"):"extinguish",        # 遮蔽链·剥夺视野（火失所依）
+                ("木","暗"):"decay",             # 腐朽循环·再生
+                ("木","地"):"rooting",           # 生机链·附土生根
+                ("雷","光"):"luminescence",      # 光电链·转化供能
+                ("雷","地"):"grounding",         # 电荷入地·泄放
+                ("雷","暗"):"discharge",         # 辐射屏蔽·放电
+                ("光","暗"):"obscuration",       # 照明链↔遮蔽链·直接相消
+                ("地","风"):"erosion",           # 摩擦压实↔湍流·风蚀
+                ("地","暗"):"concealment",       # 土障·埋藏掩迹
+            },
         })
         # R4 公示即执行：公示值 = 账本锚定值 = commitment(seed)，第三方可独立重算
         self.genesis_commitment=self.immutable_rule.commitment(seed=self.genesis_seed)
@@ -1044,14 +1211,18 @@ class NohnWorld:
     def _distribute_ubi(self):
         self._ubi_cycle+=1; alive=[a for a in self.agents if a.alive]
         amt=self.reserve.ubi_amount   # 原先硬编码 UBI_DAILY，config/reserve 改动不生效
-        self.reserve.distribute_ubi(len(alive))
+        n_pop=len(alive)+(1 if self.player is not None else 0)   # 居民化：玩家计入人口
+        self.reserve.distribute_ubi(n_pop)
         for a in alive: a.receive_ubi(amt); a.last_ubi_tick=self._tick
+        if self.player is not None: self.player.receive_ubi(amt)
         ev=Event(eid=self.next_eid(),etype=EventType.UBI,actor="SYSTEM",tick=self._tick,
-            data={"cycle":self._ubi_cycle,"amount_per":amt})
+            data={"cycle":self._ubi_cycle,"amount_per":amt,"pop":n_pop})
         self.event_log.append(ev); self._record_event(ev)
     def _collect_taxes(self):
         alive=[a for a in self.agents if a.alive]; rate=self.reserve.tax_rate   # 同上：原先硬编码 TAX_RATE
         total=sum(a.pay_tax(max(0.0,a.wealth*rate)) for a in alive)
+        if self.player is not None:   # 居民化：玩家同缴税
+            total+=self.player.pay_tax(max(0.0,self.player.wealth*rate))
         self.reserve.collect_tax(total)
         ev=Event(eid=self.next_eid(),etype=EventType.TAX,actor="SYSTEM",tick=self._tick,
             data={"total_collected":total})
@@ -1135,6 +1306,7 @@ class NohnWorld:
         # 年龄以「岁」计：原先每 tick +1，本文件 tps=10 时第 80 tick 就进入老年死亡，社会必然瞬间灭绝
         if self._tick%self.config.ticks_per_year==0:
             for a in alive: a.age+=1
+            if self.player is not None: self.player.age+=1   # 居民化：玩家同样老去（演示中不设玩家死亡，见 _check_deaths 边界）
         for a in alive:
             a.perceive(self); d=a.think(self); te.extend(a.act(d,self))
             # 人格层推进放在 act 之后：读到的需求/能量是本 tick 结算后的值
@@ -1365,11 +1537,11 @@ RES_LABELS={"food":"食物","water":"水","wood":"木材","stone":"石料",
     "herb":"草药","ore":"矿石","fruit":"水果"}
 BLD_LABELS={"house":"住宅","market":"集市","workshop":"工坊","garden":"花园","library":"图书馆"}
 
-BUILDING_STYLE={"house":{"h":20,"top":(216,118,106),"wall":(226,170,132)},
-    "market":{"h":16,"top":(218,150,78),"wall":(240,198,142)},
-    "workshop":{"h":16,"top":(180,142,110),"wall":(152,120,94)},
-    "garden":{"h":12,"top":(130,198,112),"wall":(152,192,132)},
-    "library":{"h":20,"top":(140,120,202),"wall":(122,104,178)}}
+BUILDING_STYLE={"house":{"h":34,"top":(216,118,106),"wall":(226,170,132)},
+    "market":{"h":26,"top":(218,150,78),"wall":(240,198,142)},
+    "workshop":{"h":26,"top":(180,142,110),"wall":(152,120,94)},
+    "garden":{"h":18,"top":(130,198,112),"wall":(152,192,132)},
+    "library":{"h":32,"top":(140,120,202),"wall":(122,104,178)}}
 
 def _lerp_color(c1,c2,t):
     t=max(0.0,min(1.0,t))
@@ -1388,6 +1560,10 @@ def _gini(values):
     return max(0.0,min(1.0,cum/(n*s)))
 
 def _rounded(surf,rect,color,radius=6,outline=None,ow=1,alpha=None):
+    # 调用点有两种传参：pygame.Rect 与 4 元组 (x,y,w,h)。alpha 分支要读 rect.w/.h，
+    # 元组没有这两属性会崩（tooltip 悬浮即触发）。统一在入口归一为 Rect。
+    if not isinstance(rect,pygame.Rect):
+        rect=pygame.Rect(rect)
     if alpha is not None:
         s=pygame.Surface((max(1,int(rect.w)),max(1,int(rect.h))),pygame.SRCALPHA)
         pygame.draw.rect(s,tuple(color)+(alpha,),s.get_rect(),border_radius=radius)
@@ -1419,8 +1595,10 @@ def build_sky(seed):
     return s
 
 def build_ground(seed):
-    """手绘感草地瓦片 + 岛边缘 + 岛下阴影，预渲染一次"""
-    s=pygame.Surface((MAP_W,MAP_H))
+    """手绘感草地瓦片 + 岛边缘 + 岛下阴影，预渲染一次。
+    必须用 SRCALPHA：菱形之外的像素保持透明，否则会把天空整个盖成黑幕
+    （v1 缺陷——地图四周全黑即此因）。"""
+    s=pygame.Surface((MAP_W,MAP_H),pygame.SRCALPHA)
     for gx in range(WORLD_SIZE):
         for gy in range(WORLD_SIZE):
             cx,cy=tile_center(gx,gy)
@@ -1509,48 +1687,115 @@ def draw_building_anim(screen,overlay,b,tick):
         pygame.draw.rect(screen,(110,92,160),(gxp-3,gyp-2,6,6),border_radius=1)
 
 def draw_resource_anim(screen,overlay,r):
+    """资源精灵：离屏 28×28 画布按 v1 形状绘制，再 2× 最近邻放大 blit。
+    v1 直接画在 screen 上只有 6-12px，与 2× 小人同框时视觉过小；
+    形状/配色逐字沿用 v1，仅基准点从屏幕坐标改为画布内 (14,22)。"""
     gx,gy=r["pos"]; t=r["type"]
-    gxp,gyp=grid_ground(gx,gy)
+    rgx,rgy=grid_ground(gx,gy)                       # 真实屏幕落点
     s=int(min(12,max(6,5+r["amount"]//3)))
-    _draw_shadow(overlay,gxp,gyp,12,4)
+    _surf=pygame.Surface((28,28),pygame.SRCALPHA)
+    gxp,gyp=14,22                                    # 画布内基准点
     ink=PAL["ink"]
     if t=="food":     # 绿苹果
-        pygame.draw.circle(screen,ink,(gxp,gyp-s//2),4)
-        pygame.draw.circle(screen,(122,206,96),(gxp,gyp-s//2),3)
-        pygame.draw.line(screen,ink,(gxp,gyp-s//2-3),(gxp,gyp-s//2-5),2)
-        pygame.draw.ellipse(screen,(120,196,110),(gxp+1,gyp-s//2-6,5,3))
+        pygame.draw.circle(_surf,ink,(gxp,gyp-s//2),4)
+        pygame.draw.circle(_surf,(122,206,96),(gxp,gyp-s//2),3)
+        pygame.draw.line(_surf,ink,(gxp,gyp-s//2-3),(gxp,gyp-s//2-5),2)
+        pygame.draw.ellipse(_surf,(120,196,110),(gxp+1,gyp-s//2-6,5,3))
     elif t=="fruit":  # 红莓
-        pygame.draw.circle(screen,ink,(gxp-3,gyp-s//4),3)
-        pygame.draw.circle(screen,ink,(gxp+3,gyp-s//4),3)
-        pygame.draw.circle(screen,ink,(gxp,gyp-s//4+3),3)
+        pygame.draw.circle(_surf,ink,(gxp-3,gyp-s//4),3)
+        pygame.draw.circle(_surf,ink,(gxp+3,gyp-s//4),3)
+        pygame.draw.circle(_surf,ink,(gxp,gyp-s//4+3),3)
         for cx,cy in ((gxp-3,gyp-s//4),(gxp+3,gyp-s//4),(gxp,gyp-s//4+3)):
-            pygame.draw.circle(screen,(236,110,110),(cx,cy),2)
-        pygame.draw.ellipse(screen,(120,196,110),(gxp-2,gyp-s//2-3,5,3))
+            pygame.draw.circle(_surf,(236,110,110),(cx,cy),2)
+        pygame.draw.ellipse(_surf,(120,196,110),(gxp-2,gyp-s//2-3,5,3))
     elif t=="water":  # 水滴
-        pygame.draw.polygon(screen,ink,[(gxp,gyp-s),(gxp+3,gyp-s//2),(gxp-3,gyp-s//2)])
-        pygame.draw.circle(screen,(120,196,236),(gxp,gyp-s//2+1),3)
-        pygame.draw.circle(screen,(110,190,236),(gxp,gyp-s//2+1),2)
-        pygame.draw.circle(screen,(238,250,255),(gxp-1,gyp-s//2),1)
+        pygame.draw.polygon(_surf,ink,[(gxp,gyp-s),(gxp+3,gyp-s//2),(gxp-3,gyp-s//2)])
+        pygame.draw.circle(_surf,(120,196,236),(gxp,gyp-s//2+1),3)
+        pygame.draw.circle(_surf,(110,190,236),(gxp,gyp-s//2+1),2)
+        pygame.draw.circle(_surf,(238,250,255),(gxp-1,gyp-s//2),1)
     elif t=="wood":   # 木段
-        pygame.draw.rect(screen,ink,(gxp-4,gyp-4,9,5),border_radius=2)
-        pygame.draw.rect(screen,(176,132,80),(gxp-3,gyp-3,7,3),border_radius=2)
-        pygame.draw.circle(screen,(140,100,60),(gxp,gyp-2),2)
-        pygame.draw.circle(screen,(176,132,80),(gxp,gyp-2),1)
+        pygame.draw.rect(_surf,ink,(gxp-4,gyp-4,9,5),border_radius=2)
+        pygame.draw.rect(_surf,(176,132,80),(gxp-3,gyp-3,7,3),border_radius=2)
+        pygame.draw.circle(_surf,(140,100,60),(gxp,gyp-2),2)
+        pygame.draw.circle(_surf,(176,132,80),(gxp,gyp-2),1)
     elif t=="stone":  # 矿石
-        pygame.draw.polygon(screen,ink,[(gxp-4,gyp-1),(gxp-2,gyp-4),(gxp+3,gyp-3),(gxp+4,gyp+1),(gxp-1,gyp+2)])
-        pygame.draw.polygon(screen,(150,152,164),[(gxp-4,gyp-1),(gxp-2,gyp-4),(gxp+3,gyp-3),(gxp+4,gyp+1),(gxp-1,gyp+2)])
-        pygame.draw.polygon(screen,(186,188,196),[(gxp-4,gyp-1),(gxp-2,gyp-4),(gxp+1,gyp-3),(gxp-1,gyp+1)])
+        pygame.draw.polygon(_surf,ink,[(gxp-4,gyp-1),(gxp-2,gyp-4),(gxp+3,gyp-3),(gxp+4,gyp+1),(gxp-1,gyp+2)])
+        pygame.draw.polygon(_surf,(150,152,164),[(gxp-4,gyp-1),(gxp-2,gyp-4),(gxp+3,gyp-3),(gxp+4,gyp+1),(gxp-1,gyp+2)])
+        pygame.draw.polygon(_surf,(186,188,196),[(gxp-4,gyp-1),(gxp-2,gyp-4),(gxp+1,gyp-3),(gxp-1,gyp+1)])
     elif t=="herb":   # 草药
-        pygame.draw.line(screen,ink,(gxp,gyp),(gxp,gyp-5),2)
+        pygame.draw.line(_surf,ink,(gxp,gyp),(gxp,gyp-5),2)
         for dx in (-2,0,2):
-            pygame.draw.ellipse(screen,(96,200,128),(gxp+dx-2,gyp-7+(abs(dx)),4,3))
-            pygame.draw.ellipse(screen,ink,(gxp+dx-2,gyp-7+(abs(dx)),4,3),1)
+            pygame.draw.ellipse(_surf,(96,200,128),(gxp+dx-2,gyp-7+(abs(dx)),4,3))
+            pygame.draw.ellipse(_surf,ink,(gxp+dx-2,gyp-7+(abs(dx)),4,3),1)
     elif t=="ore":    # 紫晶
-        pygame.draw.polygon(screen,ink,[(gxp-3,gyp),(gxp-1,gyp-5),(gxp+3,gyp-4),(gxp+4,gyp+1),(gxp, gyp+2)])
-        pygame.draw.polygon(screen,(150,110,190),[(gxp-3,gyp),(gxp-1,gyp-5),(gxp+3,gyp-4),(gxp+4,gyp+1),(gxp,gyp+2)])
-        pygame.draw.line(screen,(238,238,255),(gxp-1,gyp-4),(gxp+2,gyp+1),1)
+        pygame.draw.polygon(_surf,ink,[(gxp-3,gyp),(gxp-1,gyp-5),(gxp+3,gyp-4),(gxp+4,gyp+1),(gxp, gyp+2)])
+        pygame.draw.polygon(_surf,(150,110,190),[(gxp-3,gyp),(gxp-1,gyp-5),(gxp+3,gyp-4),(gxp+4,gyp+1),(gxp, gyp+2)])
+        pygame.draw.line(_surf,(238,238,255),(gxp-1,gyp-4),(gxp+2,gyp+1),1)
+    screen.blit(pygame.transform.scale(_surf,(56,56)),(rgx-28,rgy-44))
+    _draw_shadow(overlay,rgx,rgy,16,5)
 
-def draw_agent_anim(screen,overlay,a,selected,tick,world,warn_surf):
+# ---- NPC 聊天气泡（M2.7 渲染层）----
+# 台词为确定性派生：crc32(aid) 错峰开口 + tick 轮换选句，零世界 RNG 消耗；
+# 内容四层表格（需求危机 > 位阶台词 > 状态台词 > 通用闲聊），文案 [自创]，
+# 世界观名词（职阶/元素）溯源同 demo/vocations.py 口径。
+VOCATION_LINES={
+    "铁匠":"炉火正好，打铁去","农民":"地里的活不等人","矿工":"井下黑得很",
+    "樵夫":"好木在深林","渔夫":"今日鱼汛不错","厨师":"火候差半分",
+    "商人":"价钱好商量","行商":"下一站再赚一笔","见习法师":"咒文背到第三段了",
+    "法师":"冥想凝核，勿扰","学徒":"师父说，先识字","医者":"伤药还剩三副",
+    "酒保":"来杯热的？","吟游诗人":"新编了段谣曲，要听吗","猎户":"林子里有蹄印",
+    "守林人":"生木不可乱砍","信使":"加急件，让让！","弓手":"靶心又偏了一寸",
+    "剑士":"一日不练手生","骑士":"誓约在身","教堂杂役":"愿光眷顾",
+    "教区祭司":"圣事莫迟","教授":"午后答疑","冰晶技师":"网络又结霜了",
+    "探界者":"北边有一条新路","符文匠":"这一笔要一气呵成","魔药师":"药材要趁鲜",
+    "大商人":"商路即命脉","御风船员":"风向正好","魔工师":"魔晶又该换了",
+}
+
+def npc_line(a, tick):
+    """NPC 当前应说的台词；返回 None = 本 tick 不开口（错峰窗口外）。"""
+    n=a.needs
+    crc=zlib.crc32(a.aid.encode("utf-8"))
+    if (tick+crc)%360>=110:          # 约 1/3 时间窗口，全员错峰
+        return None
+    pool=[]
+    if n.get("physiology",100)<30: pool=["肚子咕咕叫…","谁有多余的吃的吗","好饿，找点吃的去"]
+    elif n.get("safety",100)<30: pool=["晚上不敢出门","想有间自己的屋子"]
+    elif n.get("belonging",100)<30: pool=["好久没人跟我说话了","想找个伴"]
+    elif n.get("esteem",100)<30: pool=["总得做出点成绩来","没人记得我做过什么"]
+    elif a.energy<20: pool=["累瘫了…","得歇口气"]
+    elif n.get("self_actualization",50)>=70: pool=["有个想法，想试试","想创作一件东西"]
+    if not pool:
+        v=getattr(a,"vocation",None)
+        if v in VOCATION_LINES:
+            pool=[VOCATION_LINES[v]]
+        else:
+            st=a.state.value
+            if st=="resting": pool=["歇一会儿","晒晒太阳真好"]
+            elif st=="trading": pool=["成交？","这货紧俏"]
+            elif st=="socializing": pool=["天气不错啊","近来可好？"]
+            elif st=="learning": pool=["学无止境"]
+            elif st=="creating": pool=["灵感来了！"]
+            elif st=="working": pool=["活儿干不完哟","再干一会儿"]
+            else: pool=["嗯……","今天风挺大"]
+        el=getattr(a,"element",None)             # 元素彩蛋混入轮换池
+        if el=="火": pool.append("火总得有燃料")
+        elif el=="水": pool.append("水是生命之源")
+        elif el=="光": pool.append("向着光走")
+    return pool[((tick+crc)//120)%len(pool)]
+
+def draw_speech_bubble(screen,font,x,y,text):
+    """白色圆角气泡 + 下垂尾巴，画在 (x,y)=气泡锚点（小人头顶上方）。"""
+    if font is None or not text: return
+    tw=font.size(text)[0]
+    bw=tw+12; bh=15
+    bx=max(2,min(MAP_W-bw-2,x-bw//2)); by=y-bh
+    _rounded(screen,(bx,by,bw,bh),(250,250,246),radius=6,outline=PAL["ink"],ow=1,alpha=235)
+    pygame.draw.polygon(screen,(250,250,246),[(x-4,by+bh-1),(x+4,by+bh-1),(x,by+bh+4)])
+    pygame.draw.line(screen,PAL["ink"],(x-4,by+bh-1),(x,by+bh+4),1)
+    pygame.draw.line(screen,PAL["ink"],(x+4,by+bh-1),(x,by+bh+4),1)
+    screen.blit(font.render(text,True,(40,36,48)),(bx+6,by+2))
+
+def draw_agent_anim(screen,overlay,a,selected,tick,world,warn_surf,font=None):
     gx,gy=a.pos.x,a.pos.y
     gxp,gyp=grid_ground(gx,gy)
     if not a.alive:
@@ -1561,62 +1806,42 @@ def draw_agent_anim(screen,overlay,a,selected,tick,world,warn_surf):
         pygame.draw.line(screen,(90,92,104),(gxp+3,gyp-8),(gxp-3,gyp-2),2)
         return
     state=a.state.value
-    cloth=COLORS.get("agent_"+state,COLORS["agent_idle"])
+    _vv=getattr(a,"vocation",None)          # StoryWorld 身份化 NPC：职阶配色+势力徽章
+    cloth=pspr.vocation_cloth(_vv) if _vv else COLORS.get("agent_"+state,COLORS["agent_idle"])
     hair=GEN_COLORS[a.generation%len(GEN_COLORS)]
-    hx,hy=gxp,gyp-14
-    sidx=(abs(gx)*31+gy)%7
-    bob=int(math.sin(tick*0.09+sidx)*1.2) if state!="working" else 0
-    hy+=bob
-    _draw_shadow(overlay,gxp,gyp,14,5)
-    # 身体（连身衣 + 腿）
-    pygame.draw.rect(screen,PAL["ink"],(hx-6,hy+2,14,11),border_radius=5)
-    pygame.draw.rect(screen,cloth,(hx-5,hy+3,12,9),border_radius=5)
-    pygame.draw.line(screen,_darken(cloth,0.86),(hx-3,hy+10),(hx-4,hy+13),2)
-    pygame.draw.line(screen,_darken(cloth,0.86),(hx+3,hy+10),(hx+4,hy+13),2)
-    pygame.draw.line(screen,_lerp_color(cloth,(255,255,255),0.3),(hx-4,hy+4),(hx+3,hy+4),2)
-    # 头（黑描边 + 肤色 + 发盖）
-    pygame.draw.circle(screen,PAL["ink"],(hx,hy-7),8)
-    pygame.draw.circle(screen,hair,(hx,hy-7),7)
-    pygame.draw.circle(screen,PAL["ink"],(hx,hy-4),6)
-    pygame.draw.circle(screen,PAL["skin"],(hx,hy-4),5)
-    for bx in (-5,-1,4):  # 刘海
-        pygame.draw.line(screen,hair,(hx+bx,hy-10),(hx+bx,hy-6),3)
-    # 表情
-    if state=="resting":
-        for ex in (-2,2):
-            pygame.draw.arc(screen,PAL["ink"],(hx+ex-3,hy-5,6,4),0.15,2.99,2)
-    else:
-        for ex in (-2,2):
-            pygame.draw.ellipse(screen,(255,255,255),(hx+ex-2,hy-5,4,5))
-            pygame.draw.circle(screen,(96,78,72),(hx+ex,hy-3),2)
-            pygame.draw.circle(screen,(30,24,32),(hx+ex,hy-3),1)
-            pygame.draw.circle(screen,(255,255,255),(hx+ex-1,hy-4),1)
-        if state=="working":
-            pygame.draw.circle(screen,(120,196,244),(hx+7,hy-9),2)
-            pygame.draw.circle(screen,(188,236,255),(hx+6,hy-10),1)
-    # 腮红
-    pygame.draw.circle(screen,PAL["blush"],(hx-6,hy-2),2)
-    pygame.draw.circle(screen,PAL["blush"],(hx+6,hy-2),2)
-    # 嘴
-    pygame.draw.arc(screen,PAL["ink"],(hx-2,hy-2,4,3),0.2,2.9,1)
+    # 坎公风像素小人：四向行走 / 弹跳步态 / 厚描边（pixel_sprites 渲染，含阴影）。
+    # NPC 行走相位由 tick+坐标派生（确定性，不消耗 RNG）；朝向由移动向量维护。
+    _moving = (state == "working")
+    pspr.draw_chibi(screen, overlay, gxp, gyp, cloth=cloth, hair=hair,
+        direction=getattr(a, "facing", "down"),
+        phase=((tick * 0.22) + ((abs(gx) * 31 + gy) % 7) * 0.09) % 1.0 if _moving else 0.0,
+        state=state, idle_t=tick, hero=False,
+        badge=pspr.faction_badge(getattr(a, "faction", None)) if _vv else None,
+        aura=pspr.ELEMENT_AURA.get(getattr(a, "element", None)),
+        gear=pspr.vocation_gear(_vv) if _vv else None)
+    hx, hy = gxp, gyp - 36   # 气泡/爱心/选中框的坐标基准（2× 精灵头顶）
     # 配偶爱心（浮动）
     if a.partner_id:
         p=world.find_agent(a.partner_id)
         if p and p.alive:
-            by=hy-24+int(math.sin(tick*0.12)*1.5)
+            by=hy-20+int(math.sin(tick*0.12)*1.5)
             pygame.draw.circle(screen,(240,110,160),(hx-2,by-1),2)
             pygame.draw.circle(screen,(240,110,160),(hx+2,by-1),2)
             pygame.draw.polygon(screen,(240,110,160),[(hx-3,by-1),(hx+3,by-1),(hx,by+2)])
     # 需求危机气泡
     if min(a.needs.values())<15:
-        bx,byy=hx+7,hy-19
+        bx,byy=hx+8,hy-16
         pygame.draw.circle(screen,PAL["ink"],(bx,byy),6)
         pygame.draw.circle(screen,(238,96,84),(bx,byy),5)
         screen.blit(warn_surf,(bx-3,byy-5))
     # 选中框
     if selected and a.aid==selected.aid:
-        _rounded(screen,(hx-12,hy-22,24,38),(255,238,120),radius=8,outline=(120,100,30),ow=1)
-        _rounded(screen,(hx-11,hy-21,22,36),(255,238,120),radius=8,outline=(255,238,120),ow=2)
+        _rounded(screen,(hx-22,hy-14,44,52),(255,238,120),radius=8,outline=(120,100,30),ow=1)
+        _rounded(screen,(hx-21,hy-13,42,50),(255,238,120),radius=8,outline=(255,238,120),ow=2)
+    # 聊天气泡（错峰开口，台词确定性轮换；画在最上层）
+    _line=npc_line(a,tick)
+    if _line:
+        draw_speech_bubble(screen,font,gxp,gyp-60,_line)
 
 def run_era_selection(seed=0):
     import pygame, os
@@ -1677,7 +1902,8 @@ def run_era_selection(seed=0):
         screen.blit(fs.render("↑↓←→ 选择  ·  Enter 确认  ·  ESC 跳过(默认当下)",True,pal_hint),(SX,SH-28))
         pygame.display.flip(); clock.tick(30)
 
-def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, config=None):
+def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, config=None,
+            auto_story=False):
     import pygame
     from collections import deque
     pygame.init()
@@ -1698,11 +1924,16 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
     font_t=_load_font(16,True)
     clock=pygame.time.Clock()
     config=config or WorldConfig(world_size=WORLD_SIZE,initial_agents=30,initial_resources=80,initial_buildings=8,seed=seed)
-    world=NohnWorld(config)
+    import goal_system as goal_mod
+    import factions as story_mod
+    world=story_mod.StoryWorld(config)   # 目标层+剧情层随 tick 自动步进（M2.6/M2.7）
     player=world.add_player()
+    player.facing=math.pi/2                  # 初始面朝下（像素小人四向）
+    player_walk_phase=0.0
     cam_x=0.0; cam_y=0.0
     build_mode=False; build_type="house"
     running=True; paused=False; speed=tps; selected=None; show_help=False
+    show_goals=True
     show_heat=True; show_graph=True; show_eventfx=True; show_daynight=True
     sky_surf=build_sky(seed)
     ground_surf=build_ground(seed)
@@ -1781,7 +2012,7 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
             _draw_shadow(overlay,gxp,gyp,12,4)
         for a in world.agents:
             gxp,gyp=grid_ground(a.pos.x,a.pos.y)
-            _draw_shadow(overlay,gxp,gyp,14,5)
+            _draw_shadow(overlay,gxp,gyp,22,7)
         # 昼夜/季节色调
         if show_daynight:
             ph=(world._tick%240)/240.0
@@ -1803,15 +2034,37 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
         for _,_,(kind,obj) in ents:
             if kind=="b": draw_building_anim(screen,overlay,obj,world._tick)
             elif kind=="r": draw_resource_anim(screen,overlay,obj)
-            elif kind=="a": draw_agent_anim(screen,overlay,obj,selected,world._tick,world,warn_surf)
+            elif kind=="a": draw_agent_anim(screen,overlay,obj,selected,world._tick,world,warn_surf,font_s)
             else:
                 gxp,gyp=grid_ground(obj.pos.x,obj.pos.y)
-                pygame.draw.ellipse(screen,(0,0,0),(gxp-10,gyp+2,20,8))
-                pygame.draw.rect(screen,(255,220,60),(gxp-7,gyp-14,14,18))
-                pygame.draw.rect(screen,(0,0,0),(gxp-7,gyp-14,14,18),2)
-                pygame.draw.rect(screen,(255,100,50),(gxp-5,gyp-12,10,5))
+                pygame.draw.ellipse(screen,(0,0,0),(gxp-15,gyp+2,30,9))
+                # 无主角：玩家与居民同一渲染路径；职阶配色+势力徽章+元素光环
+                pdir=pspr.dir_from_vector(math.cos(player.facing),math.sin(player.facing))
+                _peng=getattr(world,"story_engine",None)
+                _pfac=getattr(getattr(_peng,"state",None),"faction",None) if _peng else None
+                pspr.draw_chibi(screen,overlay,gxp,gyp,
+                    cloth=pspr.vocation_cloth(player.vocation),hair=(110,84,60),
+                    direction=pdir,phase=player_walk_phase,state="idle",
+                    idle_t=world._tick,hero=False,
+                    badge=pspr.faction_badge(_pfac),
+                    aura=pspr.ELEMENT_AURA.get(player.element),
+                    gear=pspr.vocation_gear(player.vocation))
                 if build_mode:
-                    pygame.draw.rect(screen,(100,255,100),(gxp-10,gyp-10,20,20),2)
+                    pygame.draw.rect(screen,(100,255,100),(gxp-16,gyp-16,32,32),2)
+                _pline=("就这里吧…" if build_mode else
+                        ("做个买卖？" if player.action_mode=="trade" else None))
+                if _pline:
+                    draw_speech_bubble(screen,font_s,gxp,gyp-60,_pline)   # 玩家意图气泡
+        # 目标标记：活跃目标锁定的 NPC 头顶金色浮标（坎公式任务标记）
+        if getattr(world,"goal_generator",None):
+            for _g in world.goal_generator.active:
+                _aid=_g.context.get("npc_aid") or _g.context.get("friend_aid")
+                _ma=world.find_agent(_aid) if _aid else None
+                if _ma and _ma.alive:
+                    _mx,_my=grid_ground(_ma.pos.x,_ma.pos.y)
+                    _my2=_my-30+int(math.sin(world._tick*0.15+_ma.pos.x)*2)
+                    pygame.draw.polygon(screen,(255,210,80),[(_mx,_my2-5),(_mx+4,_my2),(_mx,_my2+4),(_mx-4,_my2)])
+                    pygame.draw.polygon(screen,PAL["ink"],[(_mx,_my2-5),(_mx+4,_my2),(_mx,_my2+4),(_mx-4,_my2)],1)
         # 事件浮字（带描边）
         for f in fx:
             rise=int(f["age"]*0.4)
@@ -1901,6 +2154,40 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
                     screen.blit(font_s.render(t,True,COLORS["text"]),(tx+14,ty+7+i*11))
                 return
 
+    def draw_goal_panel():
+        """涌现式目标面板（TAB 开关）：活跃目标 + 人话描述 + 剩余时间。"""
+        gen=world.goal_generator
+        if not show_goals or gen is None: return
+        lines=[]
+        for g in gen.active[:6]:
+            lines.append("◆ %s｜%s"%(g.title,g.describe()))
+            lines.append("   剩余 %d tick"%max(0,g.deadline_tick-world._tick))
+        if not lines:
+            lines.append("（此刻风平浪静——目标会从世界中涌现）")
+        _seng=getattr(world,"story_engine",None)
+        if _seng is not None:
+            _st=_seng.state
+            if _st.faction is None:
+                lines.append("◆ 剧情：尚未入线——按 U 选择势力或自由线")
+            else:
+                lines.append("◆ %s·%s"%(story_mod.faction_display(_st.faction),
+                    story_mod.stage_display(_st.faction,_st.stage)))
+                if _st.quest is not None:
+                    lines.append("  · %s｜%s"%(_st.quest.title,_st.quest.describe()))
+                    lines.append("     剩余 %d tick"%max(0,_st.quest.deadline_tick-world._tick))
+                elif _st.decision is not None:
+                    lines.append("  ！分支待抉择——按 U 打开剧情菜单")
+                elif _st.line_done:
+                    lines.append("  ★ 时间线已完结")
+        lines.append("E 交易 · C 创作 · G 赠予 · L 遗产 · U 剧情 · TAB 收起")
+        tw=max((font_s.size(l)[0] for l in lines),default=120)+16
+        th=len(lines)*11+12
+        _rounded(screen,(8,8,tw,th),(16,18,30),radius=8,outline=(110,120,150),ow=1,alpha=215)
+        pygame.draw.rect(screen,(245,200,90),(12,12,2,th-8),border_radius=1)
+        for i,l in enumerate(lines):
+            col=(255,238,150) if l.startswith("◆") else ((150,190,250) if i==len(lines)-1 else COLORS["text"])
+            screen.blit(font_s.render(l,True,col),(20,14+i*11))
+
     def draw_stats():
         px=MAP_W; pw=PANEL_W
         pygame.draw.rect(screen,PAL["panel"],(px,0,pw,WH))
@@ -1949,13 +2236,18 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
         y+=6
         if selected:
             a=selected
-            _rounded(screen,(px+8,y,pw-16,26),(40,36,60),radius=8,outline=(120,110,80),ow=1)
+            _rounded(screen,(px+8,y,pw-16,52),(40,36,60),radius=8,outline=(120,110,80),ow=1)
             if not a.alive:
-                screen.blit(font_b.render("[已故] %s (%s)"%(a.name,a.aid),True,COLORS["agent_dead"]),(px+16,y+6)); y+=26
+                screen.blit(font_b.render("[已故] %s (%s)"%(a.name,a.aid),True,COLORS["agent_dead"]),(px+16,y+6)); y+=52
             else:
-                screen.blit(font_b.render("%s (%s) gen%d"%(a.name,a.aid,a.generation),True,(255,238,150)),(px+16,y+6)); y+=26
-                screen.blit(font.render("状态: %s  年龄: %d"%(a.state.value,a.age),True,PAL["text"]),(px+10,y)); y+=14
-                screen.blit(font.render("财富: %.0f  精力: %.0f"%(a.wealth,a.energy),True,PAL["text"]),(px+10,y)); y+=14
+                screen.blit(font_b.render("%s (%s) gen%d"%(a.name,a.aid,a.generation),True,(255,238,150)),(px+16,y+6))
+                screen.blit(font_s.render("状态: %s  年龄: %d"%(a.state.value,a.age),True,PAL["text"]),(px+16,y+22))
+                screen.blit(font_s.render("财富: %.0f  精力: %.0f"%(a.wealth,a.energy),True,PAL["text"]),(px+16,y+36))
+                _prt=pspr.chibi_portrait(COLORS.get("agent_"+a.state.value,COLORS["agent_idle"]),
+                    GEN_COLORS[a.generation%len(GEN_COLORS)],state=a.state.value,scale=2,
+                    gear=pspr.vocation_gear(getattr(a,"vocation",None)))
+                screen.blit(_prt,(px+pw-56,y+2))
+                y+=52
                 screen.blit(font.render("声望: %.0f  知识: %.1f"%(a.reputation,a.knowledge),True,PAL["text"]),(px+10,y)); y+=14
                 ms=a.memory.stats()
                 screen.blit(font.render("记忆: %d (S:%d L:%d) 创造: %.1f"%(ms["total_memories"],ms["stm_count"],ms["ltm_count"],a.creativity),True,PAL["text"]),(px+10,y)); y+=14
@@ -1975,17 +2267,29 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
                         screen.blit(font_s.render("  "+m.content[:25],True,(140,162,196)),(px+10,y)); y+=10
         if world.player:
             p=world.player
-            _rounded(screen,(px+8,y,pw-16,80),(40,50,36),radius=8,outline=(100,200,80),ow=1)
-            screen.blit(font_b.render("★ 玩家",True,(120,255,120)),(px+16,y+5)); y+=22
-            screen.blit(font.render("坐标: (%.1f, %.1f)  精力: %.0f"%(p.fx,p.fy,p.energy),True,PAL["text"]),(px+10,y)); y+=14
+            _rounded(screen,(px+8,y,pw-16,162),(40,44,66),radius=8,outline=(90,96,130),ow=1)
+            _voc=("%s ·%s"%(p.vocation,voc.RARITY_NAMES.get(p.vocation_tier,"凡阶"))) if p.vocation else "未抽签"
+            # 魔力特性不分级：不再显示稀有度后缀，只显示名称与效果
+            _aff=((p.affinity+("｜"+p.affinity_text if p.affinity_text else ""))) if p.affinity else "未觉醒"
+            _elm=p.element if p.element else "—"
+            screen.blit(font_b.render("居民（你）｜元素：%s"%_elm,True,(150,220,255)),(px+16,y+5)); y+=19
+            screen.blit(font_b.render("职阶：%s"%_voc,True,
+                voc.RARITY_COLORS.get(p.vocation_tier,(225,232,248))),(px+16,y)); y+=18
+            screen.blit(font_s.render("魔力特性：%s"%_aff,True,(170,190,225)),(px+16,y)); y+=13
+            screen.blit(font_s.render("位阶：%s"%p.rank_title(),True,(255,238,150)),(px+16,y)); y+=14
+            for _lab,_val in (("魔力",p.magic_rank),("体能",p.body_rank),("灵魂",p.soul_strength)):
+                screen.blit(font_s.render("%s %d"%(_lab,_val),True,PAL["text"]),(px+16,y))
+                draw_need_bar(px+58,y,_val/10.0*100,pw-96,h=7); y+=11
+            y+=2
+            screen.blit(font.render("坐标: (%.1f, %.1f)  精力: %.0f  年龄: %d"%(p.fx,p.fy,p.energy,p.age),True,PAL["text"]),(px+10,y)); y+=14
             screen.blit(font.render("财富: %.0f  模式: %s"%(p.wealth,p.action_mode),True,PAL["text"]),(px+10,y)); y+=14
-            if build_mode: screen.blit(font_s.render("建造: %s (左键放置, B切换)"%build_type,True,(100,255,100)),(px+10,y)); y+=12
+            if build_mode: screen.blit(font_s.render("建造: %s (左键放置, B切换)"%build_type,True,(140,170,215)),(px+10,y)); y+=12
             inv_str=str(dict(p.inventory)) if p.inventory else "无"
             screen.blit(font_s.render("背包: "+inv_str,True,PAL["text_dim"]),(px+10,y)); y+=12
             if p.owned_buildings: screen.blit(font_s.render("资产: %d 处房产"%len(p.owned_buildings),True,(255,220,100)),(px+10,y)); y+=12
         hy=MAP_H+5
         screen.blit(font_s.render(
-            "方向键移动 | 左键采集/交易 | Q建造 B切换 T交易 | SPACE暂停 | P截图 S存档 R重置 H帮助"[:60],
+            "方向键移动 | 左键采集/选人 | E交易 C创作 G赠予 L遗产 U剧情 | Q建造 B切换 | TAB目标 SPACE暂停 R重置 H帮助"[:86],
             True,(150,150,170)),(10,hy))
         draw_legend(10,hy+18)
 
@@ -2001,6 +2305,158 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
                     selected=a; return
             selected=None
 
+    # —— 交互键（坎公式：一个 E 键管上下文交互）——
+    def _nearest_trade_npc(radius=None):
+        if radius is None:
+            radius=2.5+player.vocation_effects.get("trade_radius",0.0)   # 空间/行商/向导
+        best=None
+        for a in world.agents:
+            if a.alive and a.inventory:
+                d=math.hypot(a.pos.x-player.fx,a.pos.y-player.fy)
+                if d<=radius and (best is None or d<best[0]): best=(d,a)
+        return best[1] if best else None
+    def _do_interact():
+        a=_nearest_trade_npc()
+        if a is None:
+            feed.append("附近没有可交易的 NPC（走近持货居民再按 E）")
+            spawn_fx(int(round(player.fx)),int(round(player.fy)),"…",(255,150,150))
+            return
+        result=player.trade(a,world)
+        if result:
+            feed.append("Traded %s for %d"%(result[0],result[1]))
+            spawn_fx(a.pos.x,a.pos.y,"$",EVENT_COLOR["trade"])
+        else:
+            feed.append("Trade failed（没钱或对方无货）")
+            spawn_fx(int(round(player.fx)),int(round(player.fy)),"✗",(255,120,120))
+    def _do_create():
+        if not player.inventory:
+            feed.append("背包为空——先采集材料（左键）"); return
+        title="作品#%d"%world._tick
+        aid,ch=player.create_work(world,title)
+        if aid:
+            feed.append("创作《%s》 asset=%s"%(title,aid[:18]))
+            spawn_fx(int(round(player.fx)),int(round(player.fy)),"✦",(255,230,120))
+    def _do_legacy():
+        best=None
+        for a in world.agents:
+            if (not a.alive) and a.wealth>0:
+                if best is None or a.wealth>best.wealth: best=a
+        if best is None:
+            feed.append("附近没有待结算的遗产"); return
+        res=goal_mod.settle_legacy(world,best.aid,by=player.pid)
+        if res:
+            player.gain_xp("soul",5)         # 三成长·灵魂：送行
+            feed.append("遗产 %.0f → %s"%(res["amount"],
+                ("继承:"+res["heir"]) if res["route"]=="heir" else "国库"))
+            spawn_fx(best.pos.x,best.pos.y,"❦",(230,200,120))
+    def _do_give():
+        best=None
+        for a in world.agents:
+            if not a.alive: continue
+            mn=min(a.needs[n] for n in FIVE_LAYER_NEEDS)
+            d=math.hypot(a.pos.x-player.fx,a.pos.y-player.fy)
+            if d<=3.0 and mn<40 and (best is None or mn<best[0]): best=(mn,a)
+        if best is None:
+            feed.append("附近没有陷入困境的 NPC"); return
+        a=best[1]
+        item=None
+        for t in ("food","water","fruit"):
+            if player.inventory.get(t,0)>0: item=t; break
+        if item is None and player.inventory:
+            item=sorted(player.inventory.keys())[-1]
+        if item is None:
+            feed.append("背包为空——无物可赠"); return
+        player.inventory[item]-=1
+        if player.inventory[item]<=0: del player.inventory[item]
+        _boost=30.0*(1.0+player.vocation_effects.get("give_bonus",0.0))   # 慈悲者：赠予+15%
+        if item in ("food","water","fruit"):
+            a.needs["physiology"]=min(100.0,a.needs["physiology"]+_boost)
+        else:
+            a.needs["belonging"]=min(100.0,a.needs["belonging"]+_boost)
+        a.memory.remember("收到 %s 赠予"%item,0.6,"grateful",["gift"])
+        player.gain_xp("soul",3)             # 三成长·灵魂：赠予
+        feed.append("赠予 %s 一件 %s"%(a.name,item))
+        spawn_fx(a.pos.x,a.pos.y,"♥",(255,140,180))
+
+    # —— 剧情菜单（U 键：入会决策 / 分支选择 / 时间线详情，M2.7）——
+    story_menu=None; story_sel=0; story_items=[]
+    def _story_open():
+        nonlocal story_menu, story_sel, story_items
+        eng=getattr(world,"story_engine",None)
+        if eng is None:
+            feed.append("剧情层未挂载"); return
+        st=eng.state
+        if st.decision is not None:
+            story_items=[(c["label"],"分支节点 · 第 %d 阶完成"%(st.decision["stage"]+1),
+                          ("decide",c["key"])) for c in st.decision["choices"]]
+            story_menu="branch"
+        elif st.faction is None:
+            story_items=[]
+            for k in eng.offers():
+                if k==story_mod.FREELANCE_KEY:
+                    _lab="【自由职业线】不入任何势力"
+                else:
+                    _lab="加入 "+story_mod.faction_display(k)
+                story_items.append((_lab,"职阶「%s」的资格线"%player.vocation,("join",k)))
+            story_menu="join"
+        else:
+            story_menu="info"
+        story_sel=0
+
+    def _wrap_cn(t,n):
+        return [t[i:i+n] for i in range(0,len(t),n)] or [""]
+
+    def draw_story_menu():
+        if story_menu is None: return
+        eng=getattr(world,"story_engine",None)
+        if eng is None: return
+        st=eng.state
+        dim=pygame.Surface((MAP_W,MAP_H),pygame.SRCALPHA); dim.fill((8,10,22,150))
+        screen.blit(dim,(0,0))
+        cw=520
+        if story_menu=="info":
+            lines=[]
+            _fn=story_mod.faction_display(st.faction) if st.faction else "未入线"
+            _sn=story_mod.stage_display(st.faction,st.stage) if st.faction else ""
+            lines.append(("◆ 时间线 · %s · %s"%(_fn,_sn),(255,238,150)))
+            if st.line_done:
+                for _seg in _wrap_cn(st.line_lore,46): lines.append((_seg,(255,220,130)))
+            else:
+                if st.quest is not None:
+                    for _seg in _wrap_cn("【%s】%s"%(st.quest.title,st.quest.describe()),46):
+                        lines.append((_seg,(230,240,255)))
+                    for _seg in _wrap_cn(st.quest.lore,46):
+                        lines.append(("   "+_seg,(150,168,205)))
+                    lines.append(("   剩余 %d tick"%max(0,st.quest.deadline_tick-world._tick),(150,168,205)))
+                if st.decision is not None:
+                    lines.append(("！分支待抉择——按 E 进入选择",(255,190,110)))
+                lines.append(("节点记录 %d 条 · 锁死势力：%s"%(len(st.history),
+                    "、".join(story_mod.faction_display(k) for k in st.locked) or "无"),(150,168,205)))
+            chh=56+len(lines)*13
+            bx=(MAP_W-cw)//2; by=(MAP_H-chh)//2
+            _rounded(screen,(bx,by,cw,chh),(16,18,30),radius=10,outline=(120,130,170),ow=1,alpha=240)
+            for i,(t,c) in enumerate(lines):
+                screen.blit(font_s.render(t,True,c),(bx+16,by+12+i*13))
+            screen.blit(font_s.render("U / Esc 关闭",True,(140,150,180)),(bx+16,by+chh-16))
+        else:
+            _title=("分支选择——这条时间线从此处改变" if story_menu=="branch"
+                    else "入会决策——选择你的剧情线")
+            chh=70+len(story_items)*34
+            bx=(MAP_W-cw)//2; by=(MAP_H-chh)//2
+            _rounded(screen,(bx,by,cw,chh),(16,18,30),radius=10,outline=(120,130,170),ow=1,alpha=240)
+            screen.blit(font_b.render(_title,True,(255,238,150)),(bx+18,by+12))
+            for i,(lab,desc,_act) in enumerate(story_items):
+                iy=by+40+i*34
+                sel=(i==story_sel)
+                _rounded(screen,(bx+12,iy,cw-24,30),(60,64,100) if sel else (30,34,56),
+                         radius=7,outline=(255,220,120) if sel else (70,78,110),ow=1)
+                screen.blit(font_b.render(("▶ " if sel else "　 ")+lab,True,
+                    (255,240,180) if sel else (210,220,240)),(bx+22,iy+7))
+                screen.blit(font_s.render(desc,True,(150,168,205)),
+                            (bx+cw-16-font_s.size(desc)[0],iy+10))
+            screen.blit(font_s.render("W/S 选择 · E / 回车 确认 · U / Esc 关闭",True,(140,150,180)),
+                        (bx+18,by+chh-16))
+
     def sample_history():
         s=world.get_stats()
         hist["pop"].append(s["alive"])
@@ -2009,11 +2465,17 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
         hist["money"].append(s["money_supply"])
 
     if screenshot:
+        _seng=getattr(world,"story_engine",None)
+        if _seng is not None and auto_story:
+            _ok,_msg=story_mod.story_join(world,_seng.offers()[0])
+            print("[auto-story] %s"%_msg)          # 验收注入：自动入线
         for _ in range(max_ticks or 600):
             note_events(world.tick()); sample_history()
         for _ in range(8): sample_history()
         del fx[:-8]
-        draw_world(); draw_stats(); pygame.display.flip()
+        if _seng is not None and auto_story:
+            _story_open()                          # 验收注入：打开剧情菜单
+        draw_world(); draw_stats(); draw_goal_panel(); draw_story_menu(); pygame.display.flip()
         pygame.image.save(screen,screenshot)
         print("Screenshot saved: %s (tick=%d)"%(screenshot,world._tick))
         pygame.quit(); return world
@@ -2022,6 +2484,25 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
         for ev in pygame.event.get():
             if ev.type==pygame.QUIT: running=False
             elif ev.type==pygame.KEYDOWN:
+                if story_menu is not None:
+                    # 菜单态吞掉按键：W/S/E 不再触发热力图/存档/交互
+                    if ev.key in (pygame.K_u,pygame.K_ESCAPE): story_menu=None
+                    elif ev.key in (pygame.K_UP,pygame.K_w): story_sel=max(0,story_sel-1)
+                    elif ev.key in (pygame.K_DOWN,pygame.K_s):
+                        story_sel=min(len(story_items)-1,story_sel+1)
+                    elif ev.key in (pygame.K_e,pygame.K_RETURN,pygame.K_SPACE):
+                        if story_menu=="info":
+                            story_menu=None
+                        elif story_items:
+                            _lab,_desc,_act=story_items[max(0,story_sel)]
+                            _ok,_m=(story_mod.story_join(world,_act[1])
+                                    if _act[0]=="join" else story_mod.story_decide(world,_act[1]))
+                            feed.append(("✓ " if _ok else "✗ ")+_m)
+                            if _ok:
+                                spawn_fx(int(round(player.fx)),int(round(player.fy)),
+                                         "★",(255,230,120))
+                            _story_open()
+                    continue
                 if ev.key==pygame.K_SPACE: paused=not paused
                 elif ev.key in (pygame.K_EQUALS,pygame.K_PLUS,pygame.K_KP_PLUS): speed=min(60,speed+5)
                 elif ev.key in (pygame.K_MINUS,pygame.K_KP_MINUS): speed=max(1,speed-5)
@@ -2029,12 +2510,18 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
                 elif ev.key==pygame.K_h: show_help=not show_help
                 elif ev.key==pygame.K_w: show_heat=not show_heat
                 elif ev.key==pygame.K_f: show_graph=not show_graph
-                elif ev.key==pygame.K_e: show_eventfx=not show_eventfx
+                elif ev.key==pygame.K_v: show_eventfx=not show_eventfx
+                elif ev.key==pygame.K_TAB: show_goals=not show_goals
+                elif ev.key==pygame.K_u: _story_open()
+                elif ev.key==pygame.K_e: _do_interact()
+                elif ev.key==pygame.K_c: _do_create()
+                elif ev.key==pygame.K_g: _do_give()
+                elif ev.key==pygame.K_l: _do_legacy()
                 elif ev.key==pygame.K_n: show_daynight=not show_daynight
                 elif ev.key==pygame.K_p:
                     shot="second_reality_%06d.png"%world._tick
                     pygame.image.save(screen,shot); print("Screenshot saved: "+shot)
-                elif ev.key==pygame.K_r: world=NohnWorld(config); player=world.add_player(); selected=None; fx.clear(); feed.clear()
+                elif ev.key==pygame.K_r: world=story_mod.StoryWorld(config); player=world.add_player(); selected=None; fx.clear(); feed.clear(); story_menu=None
                 elif ev.key==pygame.K_q:
                     build_mode=not build_mode
                     player.action_mode="build" if build_mode else "observe"
@@ -2067,15 +2554,28 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_era=None, con
         keys=pygame.key.get_pressed()
         dx=(1 if keys[pygame.K_RIGHT] else 0)-(1 if keys[pygame.K_LEFT] else 0)
         dy=(1 if keys[pygame.K_DOWN] else 0)-(1 if keys[pygame.K_UP] else 0)
+        if story_menu is not None: dx=dy=0          # 菜单态：W/S 是菜单导航，封锁移动
         if dx!=0 or dy!=0:
             player.move(dx,dy,world.size)
+            player_walk_phase=(player_walk_phase+0.22)%1.0   # 行走相位→四帧步态
             if player.energy<5: player.rest()
         if not paused:
             note_events(world.tick()); sample_history()
+            for _tr in getattr(world,"last_goal_transitions",[]) or []:
+                if _tr["status"]=="active":
+                    feed.append("★ 新目标：%s"%_tr["title"])
+                    spawn_fx(int(round(player.fx)),int(round(player.fy)),"★",(255,230,120))
+                else:
+                    _ic={"completed":"✓","failed":"✗","expired":"⌛"}.get(_tr["status"],"·")
+                    feed.append("%s %s %s"%(_ic,_tr["title"],_tr.get("reason","")))
+                    if _tr["status"]=="completed":
+                        player.gain_xp("soul",2)     # 三成长·灵魂：目标达成
+                        if show_eventfx:
+                            spawn_fx(int(round(player.fx)),int(round(player.fy)),"✓",(130,255,160))
             if max_ticks and world._tick>=max_ticks: running=False
         for f in fx: f["age"]+=1
         fx=[f for f in fx if f["age"]<f["ttl"]]
-        draw_world(); draw_stats(); draw_tooltip(); pygame.display.flip()
+        draw_world(); draw_stats(); draw_tooltip(); draw_goal_panel(); draw_story_menu(); pygame.display.flip()
         clock.tick(speed if speed>0 else 0)
     pygame.quit()
     return world
@@ -2193,6 +2693,8 @@ if __name__=="__main__":
     ap.add_argument("--audit",action="store_true",
         help="run the 25-dim constitutional audit (audit_engine.SecondPerspectiveAuditor) "
              "on the simulated world; unmet dimensions are reported as-is")
+    ap.add_argument("--auto-story",action="store_true",
+                    help="screenshot 模式：自动入线并打开剧情菜单（GUI 验收用）")
     ap.add_argument("--screenshot",metavar="PATH",
         help="render one frame to PNG and exit (no display needed: forces SDL_VIDEODRIVER=dummy)")
     ap.add_argument("--agents",type=int,default=None,
@@ -2219,7 +2721,8 @@ if __name__=="__main__":
             agents=args.agents,world_size=args.world_size) else 1)
     if args.screenshot:
         os.environ.setdefault("SDL_VIDEODRIVER","dummy")   # 必须在 pygame.init() 之前设置
-        run_gui(tps=args.tps,seed=args.seed,max_ticks=args.ticks,screenshot=args.screenshot,config=demo_cfg)
+        run_gui(tps=args.tps,seed=args.seed,max_ticks=args.ticks,screenshot=args.screenshot,config=demo_cfg,
+                auto_story=args.auto_story)
         raise SystemExit(0)
     _print_demo_note(demo_cfg)
     world=run_headless(args.ticks,verbose=True,seed=args.seed,config=demo_cfg) if args.headless else run_gui(tps=args.tps,seed=args.seed,config=demo_cfg)
