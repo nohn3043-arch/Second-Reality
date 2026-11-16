@@ -7,3 +7,5 @@ __pycache__/
 .codebuddy/
 # 世界名片是运行期产物（世界密钥每次启动重签），不入库
 world_card.json
+# 生图原始素材与备份（体积大、可再生；只入库 make_assets.py 产出的 demo/assets/）
+demo/assets_src/
