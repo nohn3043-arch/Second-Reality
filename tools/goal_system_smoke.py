@@ -888,6 +888,26 @@ _wc1,_pc1 = fresh_world(704)
 _wc2,_pc2 = fresh_world(704)
 check("上下文交互扫描同 seed 逐项一致（零 RNG）",
       _ctxact(_pc1,_wc1)==_ctxact(_pc2,_wc2))
+from demo.virtual_world import EraCalendar as _EC   # noqa: E402
+_ticks=[e["start_tick"] for e in _EC.ERAS]
+check("纪元表 start_tick 单调递增且唯一（快进开局前提）",
+      _ticks==sorted(_ticks) and len(set(_ticks))==len(_ticks),
+      "ticks=%s"%_ticks)
+check("纪元 key 校验：schism=800、未知值拒绝",
+      _EC.get_era("schism")["start_tick"]==800 and _EC.get_era("nope") is None)
+_wd3,_pd3 = fresh_world(705)                       # 隔离世界：避免前置检查的位阶/特性强污染
+_wd3.agents[0].vocation_tier=3
+_r5=_wd3.resolve_duel(_pd3,_wd3.agents[0])
+check("位阶防御：高阶居民还手更重且一阶玩家落败",
+      _r5["counter"]>9 and not _r5["win"], "counter=%d"%_r5["counter"])
+from demo.virtual_world import _replenish_era_population as _repfn   # noqa: E402
+_ws7,_ps7 = fresh_world(706)
+_half=[a for a in _ws7.agents if a.alive][:len([a for a in _ws7.agents if a.alive])//2]
+for _a in _half: _a.alive=False
+_rp=_repfn(_ws7)
+check("世代补齐：纪元快进后人口恢复至开局规模（演示层设定）",
+      len([a for a in _ws7.agents if a.alive])>=_ws7.config.initial_agents and _rp>0,
+      "补齐=%d 现存=%d"%(_rp,len([a for a in _ws7.agents if a.alive])))
 _wc1.agents[0].inventory["food"]=2
 _pc1.fx,_pc1.fy=float(_wc1.agents[0].pos.x),float(_wc1.agents[0].pos.y)
 _ca=[a[0] for a in _ctxact(_pc1,_wc1)]
