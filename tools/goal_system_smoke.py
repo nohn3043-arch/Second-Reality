@@ -65,10 +65,11 @@ def types_of(created):
 # 一、纪律断言
 # ============================================================
 print("\n=== 一、触发表与纪律 ===")
-check("八类触发表与 HLD §3.4 一致",
+check("十类触发表与 HLD §3.4 一致（战斗 v1 增补切磋/元素共鸣）",
       GoalGenerator.RULES == ("seek_sustenance", "help_npc", "relocate",
                               "complete_trade", "build_home", "create_work",
-                              "handle_legacy", "aid_friend"),
+                              "handle_legacy", "aid_friend",
+                              "sparring_duel", "element_resonance"),
       "rules=%d" % len(GoalGenerator.RULES))
 check("触发器注册表覆盖全部类型",
       set(GoalGenerator._TRIGGERS.keys()) == set(GoalGenerator.RULES))
@@ -246,7 +247,9 @@ gen.check(w)
 w.tick(); w.tick()
 tr = gen.update(w)
 check("超时 → EXPIRED 自动移出",
-      len(tr) == 1 and tr[0]["status"] == "expired" and gen.active == [])
+      any(t["gtype"] == "seek_sustenance" and t["status"] == "expired" for t in tr)
+      and all(g.gtype != "seek_sustenance" for g in gen.active),
+      "transitions=%s" % [t["gtype"] for t in tr])
 
 # ============================================================
 # 五、真实动作完成路径（公示即执行：每个目标都真的能完成）
@@ -625,6 +628,22 @@ def _story_act(w, p, eng):
         if math.hypot(p.fx - ox, p.fy - oy) < c["dist"]:
             p.fx = min(w.size - 1.0, ox + c["dist"] + 1.0)
             p.fy = max(0.0, min(w.size - 1.0, oy))
+    elif m == "duel_win":
+        _tgt = w.find_agent(c.get("npc_aid"))
+        if _tgt is None or not _tgt.alive:
+            _cands = [a for a in w.agents if a.alive and a.aid != p.pid]
+            if _cands:
+                _cands.sort(key=lambda a: (round(math.hypot(
+                    a.pos.x - p.fx, a.pos.y - p.fy), 4), a.aid))
+                c["npc_aid"] = _cands[0].aid
+                _tgt = _cands[0]
+        if _tgt is not None:
+            _won = any(e.etype == EventType.DUEL and e.actor == p.pid
+                       and e.target == c.get("npc_aid") and e.data.get("win")
+                       for e in w.event_log if e.tick >= c["since_tick"])
+            if not _won:
+                p.fx, p.fy = float(_tgt.pos.x), float(_tgt.pos.y)
+                w.resolve_duel(p, _tgt)
 
 
 def _drive_until_decision(w, p, max_ticks=1000):
@@ -817,6 +836,64 @@ _report2 = _rsw.run_constitutional_audit()
 _all2 = all(AuditReport._is_pass(getattr(_report2, attr))
             for attr, _ in AuditReport.FIELDS)
 check("25 维宪法审计仍全过（真栈 + 目标层 + 剧情层零扰动）", _all2)
+
+# ============================================================
+# 十、战斗 v1（切磋结算 / 吸血战斗接线 / duel_win 判据 / 元素共鸣稀有度）
+# ============================================================
+print("\n=== 十、战斗 v1 ===")
+import zlib as _zlib                                   # noqa: E402
+from demo.goal_system import GoalGenerator as _GGX     # noqa: E402
+from demo.factions import (                            # noqa: E402
+    StoryQuest as _SQX, _build_ctx as _bctxx, _mech_complete as _mcompx)
+
+_wd1, _pd1 = fresh_world(701)
+_wd2, _pd2 = fresh_world(701)
+_d1 = _wd1.resolve_duel(_pd1, _wd1.agents[0])
+_d2 = _wd2.resolve_duel(_pd2, _wd2.agents[0])
+check("同 seed 切磋结算逐字节一致（零 RNG）",
+      _d1 is not None and _d1 == _d2, "%s" % (_d1,))
+_duel_n = len([e for e in _wd1.event_log if e.etype == EventType.DUEL])
+check("DUEL 事件入事件流（目标/剧情层可复算）",
+      _duel_n == 1, "事件=%d" % _duel_n)
+check("技能双轨：一阶即有木剑式/魔力弹，自动选轨可得技能",
+      _pd1.best_skill() is not None
+      and _pd1.skill_loadout().get("sword", {}).get("name") == "木剑式",
+      "loadout=%s" % sorted(_pd1.skill_loadout().keys()))
+_pd1.vocation_effects["blood_drain"] = 0.5
+_r3 = _wd1.resolve_duel(_pd1, _wd1.agents[1] if len(_wd1.agents) > 1
+                        else _wd1.agents[0])
+check("吸血特性战斗接线（命中按伤害比例回复）",
+      _r3 is not None and _r3["healed"] > 0,
+      "healed=%s" % (_r3 or {}).get("healed"))
+_qx = _SQX(sid="T1", qkey="t1", title="t", lore="", faction="knights", stage=0,
+           mechanic="duel_win", created_tick=0, deadline_tick=999,
+           ctx=_bctxx(_pd1, _wd1, "knights", {"mechanic": "duel_win"}, 0))
+_tgtq = _wd1.find_agent(_qx.ctx.get("npc_aid"))
+if _tgtq is not None:
+    _wd1.resolve_duel(_pd1, _tgtq)
+check("duel_win 剧情判据：胜负事件可复算完成",
+      _qx.ctx.get("npc_aid") is not None and _mcompx(_pd1, _wd1, _qx) is not None,
+      "对手=%s" % _qx.ctx.get("opponent_name"))
+_ggx = _GGX(_pd1, _wd1)
+_pd1.affinity = "元素"; _pd1.magic_rank = 5
+_w0 = (7 - _zlib.crc32(str(_pd1.pid).encode("utf-8"))) % 3000
+_wd1._tick = _w0
+_twin = _ggx._trig_element_resonance(_wd1)
+_wd1._tick = (_w0 + 1) % 3000
+_toff = _ggx._trig_element_resonance(_wd1)
+check("元素共鸣：窗内触发窗外不触发（一生一次，极稀有门禁）",
+      _twin is not None and _toff is None, "窗 tick=%d" % _w0)
+from demo.virtual_world import context_actions as _ctxact   # noqa: E402
+_wc1,_pc1 = fresh_world(704)
+_wc2,_pc2 = fresh_world(704)
+check("上下文交互扫描同 seed 逐项一致（零 RNG）",
+      _ctxact(_pc1,_wc1)==_ctxact(_pc2,_wc2))
+_wc1.agents[0].inventory["food"]=2
+_pc1.fx,_pc1.fy=float(_wc1.agents[0].pos.x),float(_wc1.agents[0].pos.y)
+_ca=[a[0] for a in _ctxact(_pc1,_wc1)]
+check("上下文交互扫描：交易/切磋/采集项齐备（确定性）",
+      "trade" in _ca and "duel" in _ca and "gather" in _ca, "actions=%s"%_ca)
+
 
 # ============================================================
 # 汇总
