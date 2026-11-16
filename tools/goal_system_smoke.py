@@ -943,6 +943,13 @@ _wd8b.tick()
 check("世界事件调度同 seed 逐项一致（零 RNG）",
       [(x["id"],x["until"]) for x in _wd8.world_events]
       ==[(x["id"],x["until"]) for x in _wd8b.world_events])
+from demo.virtual_world import _lore_visible as _lv, _lore_cycle_stay as _lcs   # noqa: E402
+_vis=[t for t in range(0,30000) if _lv("iris",t)]
+check("传说现身：个体低概率（在场占比≈stay/cycle 且远低于常驻）",
+      0<len(_vis)<30000*0.07 and _lcs("iris")[0]>=9000 and _lcs("iris")[1]<700,
+      "现身=%d/30000 周期=%d 在场=%d"%(len(_vis),_lcs("iris")[0],_lcs("iris")[1]))
+check("传说现身：同 key 确定性（零 RNG 复现）",
+      [t for t in range(0,30000) if _lv("iris",t)]==_vis)
 check("世界事件表确定性（WORLD_EVENTS 常量）",
       len(_WEL)==5 and all(e["interval"]>0 and 0<=e["phase"]<e["interval"] for e in _WEL))
 _wc1.agents[0].inventory["food"]=2

@@ -2159,6 +2159,18 @@ LORE_NPCS=(   # 世界观人物命名 NPC：纯渲染装饰，不进仿真（同
     ("filia","菲莉亚",27,33),("edric","艾德里克",33,33),("ayas","阿亚斯",31,31),
 )
 
+def _lore_cycle_stay(key):
+    """传说人物现身参数（确定性，零 RNG）：(周期 tick, 在场 tick)。
+    周期 9000-12000、在场 360-600——个体数小时一遇，符合「不同时代的人随机低概率出没」。"""
+    h=zlib.crc32(key.encode("utf-8"))
+    return (9000+h%3000),(360+(h//7)%240)
+def _lore_visible(key,tick):
+    cycle,stay=_lore_cycle_stay(key)
+    h=zlib.crc32(key.encode("utf-8"))
+    p0=(h*31)%cycle
+    return (tick-p0)%cycle<stay
+_LORE_ANCHOR={}     # 现身瞬间锚定：key -> (gx,gy,现身 tick)
+
 def draw_lore_npc(screen,c,tick,font_s):
     spr=CHAR_SPR.get(c[0])
     if spr is None: return
@@ -2651,8 +2663,17 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
         if world.player:
             ents.append((world.player.fx+world.player.fy,3,("p",world.player)))
         for c in LORE_NPCS:
-            if CHAR_SPR.get(c[0]) is not None:
-                ents.append((c[2]+c[3],2,("c",c)))
+            if CHAR_SPR.get(c[0]) is None or not _lore_visible(c[0],world._tick): continue
+            if c[0] not in _LORE_ANCHOR:            # 现身瞬间定格锚点（玩家近旁，确定性偏移）
+                _px,_py=(int(player.fx),int(player.fy)) if world.player else (30,30)
+                _h=zlib.crc32(c[0].encode("utf-8"))
+                _LORE_ANCHOR[c[0]]=(max(0,min(WORLD_SIZE-1,_px+(_h//11)%9-4)),
+                    max(0,min(WORLD_SIZE-1,_py+(_h//17)%9-4)),world._tick)
+            elif _LORE_ANCHOR[c[0]][2]+_lore_cycle_stay(c[0])[1]<world._tick:
+                del _LORE_ANCHOR[c[0]]              # 离场清锚点（下次现身重定）
+            if c[0] in _LORE_ANCHOR:
+                _ax,_ay,_t0=_LORE_ANCHOR[c[0]]
+                ents.append((_ax+_ay,2,("c",(c[0],c[1],_ax,_ay))))
         ents.sort(key=lambda e:(e[0],e[1]))
         # 气泡去重叠：同一屏幕网格内只让一个开口，选中的必开口
         _bub_ok=set(); _bub_seen={}
@@ -3146,6 +3167,7 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
         world=story_mod.StoryWorld(config)
         for _ in range(start_tick): world.tick()   # 重开回同纪元（与启动口径一致）
         _replenish_era_population(world)           # 世代补齐（重开同口径）
+        _LORE_ANCHOR.clear()                       # 传说现身锚点随世界重置
         player=world.add_player()
         selected=None; fx.clear(); feed.clear(); story_menu=None
     def _act_help():
