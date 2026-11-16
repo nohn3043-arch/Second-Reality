@@ -2690,6 +2690,11 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
                         gear=pspr.vocation_gear(player.vocation))
                 if build_mode:
                     pygame.draw.rect(screen,(100,255,100),(gxp-16,gyp-16,32,32),2)
+                _bob=int(math.sin(world._tick*0.1)*3)          # 玩家标识：人群里一眼认出
+                _my2=gyp-52+_bob
+                pygame.draw.polygon(screen,PAL["gold"],[(gxp-7,_my2),(gxp+7,_my2),(gxp,_my2+9)])
+                screen.blit(font_s.render("你",True,PAL["gold"]),(gxp-8,_my2-16))
+                pygame.draw.circle(screen,PAL["gold"],(gxp,gyp+2),11,1)
                 _pline=("就这里吧…" if build_mode else
                         ("做个买卖？" if player.action_mode=="trade" else None))
                 if _pline:
@@ -2881,6 +2886,28 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
         screen.blit(font.render(_fit_text("Tick %d · %s · 缩放%d%% · seed=%d"%(
             world._tick,"[暂停]" if paused else "%d tps"%speed,int(round(zoom*100)),seed),pw-20,font),
             True,PAL["text_dim"]),(px+10,y)); y+=_lhM+1
+        if world.player:
+            p=world.player
+            _rounded(screen,(px+8,y,pw-16,186),(44,40,28),radius=8,outline=PAL["gold"],ow=1)
+            _voc=("%s ·%s"%(p.vocation,voc.RARITY_NAMES.get(p.vocation_tier,"凡阶"))) if p.vocation else "未抽签"
+            # 魔力特性不分级：不再显示稀有度后缀，只显示名称与效果
+            _aff=((p.affinity+("｜"+p.affinity_text if p.affinity_text else ""))) if p.affinity else "未觉醒"
+            _elm=p.element if p.element else "—"
+            screen.blit(font_b.render("◆ 你（玩家）｜元素：%s"%_elm,True,PAL["gold"]),(px+16,y+5)); y+=19
+            screen.blit(font_b.render(_fit_text("职阶：%s"%_voc,pw-32,font_b),True,
+                voc.RARITY_COLORS.get(p.vocation_tier,(225,232,248))),(px+16,y)); y+=18
+            screen.blit(font_s.render(_fit_text("魔力特性：%s"%_aff,pw-32,font_s),True,(170,190,225)),(px+16,y)); y+=_lhS
+            screen.blit(font_s.render("位阶：%s"%p.rank_title(),True,(255,238,150)),(px+16,y)); y+=_lhS
+            for _lab,_val in (("魔力",p.magic_rank),("体能",p.body_rank),("灵魂",p.soul_strength)):
+                screen.blit(font_s.render("%s %d"%(_lab,_val),True,PAL["text"]),(px+16,y))
+                draw_need_bar(px+58,y,_val/10.0*100,pw-96,h=7); y+=_lhS
+            y+=2
+            screen.blit(font.render(_fit_text("坐标: (%.1f, %.1f)  精力: %.0f/%.0f  魔力: %.0f  年龄: %d"%(p.fx,p.fy,p.energy,100,p.mana,p.age),pw-20,font),True,PAL["text"]),(px+10,y)); y+=_lhM
+            screen.blit(font.render(_fit_text("财富: %.0f  模式: %s"%(p.wealth,p.action_mode),pw-20,font),True,PAL["text"]),(px+10,y)); y+=_lhM
+            if build_mode: screen.blit(font_s.render("建造: %s (左键放置, B切换)"%build_type,True,(140,170,215)),(px+10,y)); y+=_lhS
+            inv_str=str(dict(p.inventory)) if p.inventory else "无"
+            screen.blit(font_s.render(_fit_text("背包: "+inv_str,pw-20,font_s),True,PAL["text_dim"]),(px+10,y)); y+=_lhS
+            if p.owned_buildings: screen.blit(font_s.render("资产: %d 处房产"%len(p.owned_buildings),True,(255,220,100)),(px+10,y)); y+=_lhS
         s=world.get_stats()
         def chip(x,cy,lab,val,accent):
             w=82
@@ -2954,28 +2981,6 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
                     screen.blit(font_s.render("最近记忆:",True,(150,190,250)),(px+10,y)); y+=_lhS
                     for m in recent[:3]:
                         screen.blit(font_s.render(_fit_text("  "+m.content,pw-20,font_s),True,(140,162,196)),(px+10,y)); y+=_lh
-        if world.player:
-            p=world.player
-            _rounded(screen,(px+8,y,pw-16,186),(40,44,66),radius=8,outline=(90,96,130),ow=1)
-            _voc=("%s ·%s"%(p.vocation,voc.RARITY_NAMES.get(p.vocation_tier,"凡阶"))) if p.vocation else "未抽签"
-            # 魔力特性不分级：不再显示稀有度后缀，只显示名称与效果
-            _aff=((p.affinity+("｜"+p.affinity_text if p.affinity_text else ""))) if p.affinity else "未觉醒"
-            _elm=p.element if p.element else "—"
-            screen.blit(font_b.render("居民（你）｜元素：%s"%_elm,True,(150,220,255)),(px+16,y+5)); y+=19
-            screen.blit(font_b.render(_fit_text("职阶：%s"%_voc,pw-32,font_b),True,
-                voc.RARITY_COLORS.get(p.vocation_tier,(225,232,248))),(px+16,y)); y+=18
-            screen.blit(font_s.render(_fit_text("魔力特性：%s"%_aff,pw-32,font_s),True,(170,190,225)),(px+16,y)); y+=_lhS
-            screen.blit(font_s.render("位阶：%s"%p.rank_title(),True,(255,238,150)),(px+16,y)); y+=_lhS
-            for _lab,_val in (("魔力",p.magic_rank),("体能",p.body_rank),("灵魂",p.soul_strength)):
-                screen.blit(font_s.render("%s %d"%(_lab,_val),True,PAL["text"]),(px+16,y))
-                draw_need_bar(px+58,y,_val/10.0*100,pw-96,h=7); y+=_lhS
-            y+=2
-            screen.blit(font.render(_fit_text("坐标: (%.1f, %.1f)  精力: %.0f  年龄: %d"%(p.fx,p.fy,p.energy,p.age),pw-20,font),True,PAL["text"]),(px+10,y)); y+=_lhM
-            screen.blit(font.render(_fit_text("财富: %.0f  模式: %s"%(p.wealth,p.action_mode),pw-20,font),True,PAL["text"]),(px+10,y)); y+=_lhM
-            if build_mode: screen.blit(font_s.render("建造: %s (左键放置, B切换)"%build_type,True,(140,170,215)),(px+10,y)); y+=_lhS
-            inv_str=str(dict(p.inventory)) if p.inventory else "无"
-            screen.blit(font_s.render(_fit_text("背包: "+inv_str,pw-20,font_s),True,PAL["text_dim"]),(px+10,y)); y+=_lhS
-            if p.owned_buildings: screen.blit(font_s.render("资产: %d 处房产"%len(p.owned_buildings),True,(255,220,100)),(px+10,y)); y+=_lhS
         panel_content_h=y+10
         screen=_real_screen
         max_scroll=max(0,panel_content_h-MAP_H)
@@ -3727,6 +3732,12 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
         if story_menu is not None or help_dialog or ctx_menu is not None:
             dx=dy=0          # 弹窗/菜单态：封锁方向键移动（W/S 在菜单里是导航）
         _dt=clock.tick(60)/1000.0                  # 渲染恒 60fps：输入/浮字/悬停与仿真解耦
+        if drag is None and world.player:          # 相机软跟随玩家（拖拽镜头时让位）
+            _px,_py=grid_ground(player.fx,player.fy)
+            _tx=_px-MAP_W/(2.0*zoom); _ty=_py-MAP_H/(2.0*zoom)
+            _k=min(1.0,_dt*6.0)
+            cam_x+=(_tx-cam_x)*_k; cam_y+=(_ty-cam_y)*_k
+            _clamp_cam()
         if paused: _acc=0.0                        # 暂停不累积，防解除后爆冲
         else: _acc+=_dt
         _need=1.0/max(1,speed)                     # 1:1 现实流速：speed=1 → 1 真实秒 = 1 sim tick
