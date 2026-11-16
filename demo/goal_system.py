@@ -88,6 +88,7 @@ for _p in (_REPO_ROOT, _HERE):
 # 执行两份模块，产生两套 EventType/NohnWorld 类，事件枚举比对将恒为 False
 # （冒烟测试 aid_friend/complete_trade/create_work 曾因此误报）。
 # 故：包内消费（demo.goal_system）走相对导入；脚本直跑回退顶层名。
+import zlib  # noqa: E402  （元素共鸣时间窗：确定性哈希，不占世界 RNG）
 try:                                                          # noqa: E402
     from .virtual_world import (                              # noqa: E402,F401
         Event, EventType, FIVE_LAYER_NEEDS, VISION, NohnWorld,
@@ -116,6 +117,8 @@ GOAL_TITLES_CN = {
     "create_work": "创造作品",
     "handle_legacy": "处理遗产",
     "aid_friend": "援助好友",
+    "sparring_duel": "切磋一场",
+    "element_resonance": "元素共鸣",
 }
 
 
@@ -145,11 +148,13 @@ class GoalConfig:
     cooldowns: Dict[str, int] = field(default_factory=lambda: {
         "seek_sustenance": 20, "help_npc": 40, "relocate": 60,
         "complete_trade": 30, "build_home": 200, "create_work": 100,
-        "handle_legacy": 40, "aid_friend": 40})
+        "handle_legacy": 40, "aid_friend": 40,
+        "sparring_duel": 300, "element_resonance": 999999})
     deadlines: Dict[str, int] = field(default_factory=lambda: {
         "seek_sustenance": 150, "help_npc": 200, "relocate": 300,
         "complete_trade": 120, "build_home": 400, "create_work": 300,
-        "handle_legacy": 200, "aid_friend": 200})
+        "handle_legacy": 200, "aid_friend": 200,
+        "sparring_duel": 240, "element_resonance": 600})
 
 
 @dataclass
@@ -195,6 +200,12 @@ class Goal:
         if self.gtype == "aid_friend":
             return "好友 %s 陷入需求危机（%d 次交往情分）" % (
                 c.get("friend_name"), c.get("bond_trades", 0))
+        if self.gtype == "sparring_duel":
+            return "与 %s 切磋一场（%.1f 格外）——胜一场算数（R 键切磋）" % (
+                c.get("npc_name"), c.get("dist", 0))
+        if self.gtype == "element_resonance":
+            return "元素共鸣：以「元素」特性引动一场切磋胜利（法阶 %d，bug 级机缘）" % (
+                c.get("magic_rank", 0))
         return self.gtype
 
     def to_dict(self) -> dict:
@@ -213,7 +224,8 @@ class GoalGenerator:
 
     # 固定触发顺序（确定性的一部分：同 tick 多目标可触发时，先来先得 gid）
     RULES = ("seek_sustenance", "help_npc", "relocate", "complete_trade",
-             "build_home", "create_work", "handle_legacy", "aid_friend")
+             "build_home", "create_work", "handle_legacy", "aid_friend",
+             "sparring_duel", "element_resonance")
 
     def __init__(self, player, world=None, config: Optional[GoalConfig] = None):
         self.player = player
@@ -377,6 +389,37 @@ class GoalGenerator:
         return {"friend_aid": a.aid, "friend_name": a.name, "bond_trades": best[2],
                 "crisis_need": round(_min_need(a), 2)}
 
+    # ---- 战斗 v1 触发（切磋 / 元素共鸣；零 RNG，判据全部可复算）----
+    def _trig_sparring_duel(self, world) -> Optional[dict]:
+        """切磋目标：指定一名最近居民（距离→aid 字典序确定性），胜一场即成。"""
+        px, py = self.player.fx, self.player.fy
+        cands = [a for a in world.agents
+                 if a.alive and a.aid != self.player.pid]
+        if not cands:
+            return None
+        t = min(cands, key=lambda a: (round(
+            math.hypot(a.pos.x - px, a.pos.y - py), 4), a.aid))
+        d = math.hypot(t.pos.x - px, t.pos.y - py)
+        return {"npc_aid": t.aid, "npc_name": getattr(t, "name", t.aid),
+                "dist": round(d, 1)}
+
+    def _trig_element_resonance(self, world) -> Optional[dict]:
+        """元素共鸣（极稀有，bug 级）：仅「元素」魔力特性持有者且法阶≥5。
+        时间窗 (tick+crc32(pid))%3000==7，一生一次（history 查重）——
+        兑现世界观「能直接操控元素力者极少，玩家很难触发」。"""
+        if self.player.affinity != "元素":
+            return None
+        if self.player.magic_rank < 5:
+            return None
+        if any(g.gtype == "element_resonance" for g in self.history):
+            return None
+        _w = (world._tick + zlib.crc32(
+            str(self.player.pid).encode("utf-8"))) % 3000
+        if _w != 7:
+            return None
+        return {"element": self.player.element,
+                "magic_rank": self.player.magic_rank}
+
     # 类级触发器注册表（类体内在函数定义之后构建）
     _TRIGGERS = {
         "seek_sustenance": _trig_seek_sustenance,
@@ -387,6 +430,8 @@ class GoalGenerator:
         "create_work": _trig_create_work,
         "handle_legacy": _trig_handle_legacy,
         "aid_friend": _trig_aid_friend,
+        "sparring_duel": _trig_sparring_duel,
+        "element_resonance": _trig_element_resonance,
     }
 
     # ---------------- 生命周期 ----------------
@@ -482,6 +527,22 @@ class GoalGenerator:
             if _min_need(a) > self.config.recovery_need:
                 return (GoalStatus.COMPLETED,
                         "好友 %s 需求已恢复（%.0f）" % (a.name, _min_need(a)))
+            return None
+        if t == "sparring_duel":
+            for e in self._events_since(world, EventType.DUEL,
+                                        self.player.pid, g.created_tick):
+                if e.target == ctx.get("npc_aid") and e.data.get("win"):
+                    return (GoalStatus.COMPLETED,
+                            "切磋获胜（%s 伤 %d）" % (e.data.get("skill"),
+                                                     e.data.get("dmg", 0)))
+            return None
+        if t == "element_resonance":
+            for e in self._events_since(world, EventType.DUEL,
+                                        self.player.pid, g.created_tick):
+                if e.data.get("win"):
+                    return (GoalStatus.COMPLETED,
+                            "元素共鸣达成（%s 引动 %s）" % (
+                                ctx.get("element"), e.data.get("skill")))
             return None
         return None
 

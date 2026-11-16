@@ -31,6 +31,8 @@ tools/goal_system_smoke.py 以 KNOWN_EFFECTS 断言完整性）：
   magic_xp         魔力成长 ×(1+v)             PlayerAgent.gain_xp
   body_xp          体能成长 ×(1+v)             PlayerAgent.gain_xp
   soul_xp          灵魂成长 ×(1+v)             PlayerAgent.gain_xp
+  sword_power      剑法威力 ×(1+v)             PlayerAgent（切磋结算·战斗 v1）
+  spell_power      法术威力 ×(1+v)             PlayerAgent（切磋结算；禀赋元素另+5% 风味）
   all              上列行为加成通用叠加          PlayerAgent._vocal
   growth           三成长全局加速（叠加）        PlayerAgent._vocal
   speed_bonus      移速 ×(1+v)                 PlayerAgent.birth_draw（重设 speed）
@@ -57,6 +59,7 @@ KNOWN_EFFECTS = frozenset({
     "trade_bonus", "trade_radius", "give_bonus", "magic_xp", "body_xp",
     "soul_xp", "all", "growth", "speed_bonus", "needs_resist", "rest_bonus",
     "wealth_start", "deadline_bonus", "blood_drain",
+    "sword_power", "spell_power",
 })
 
 
@@ -171,7 +174,7 @@ VOCATION_POOL = [
     _e("大主教",   3, 10, {"soul_xp": 0.25, "give_bonus": 0.15}, "十位大主教皆八阶圣者"),
     _e("探界者",   3, 11, {"trade_radius": 3, "speed_bonus": 0.10},
        "方向感+50% 路径记忆+30%（菲莉亚·妖精）"),
-    _e("剑帝",     3, 8, {"body_xp": 0.30, "deadline_bonus": 0.20},
+    _e("剑帝",     3, 8, {"body_xp": 0.30, "sword_power": 0.30, "deadline_bonus": 0.20},
        "剑术伤害+30% 悟性+50% 剑术精通+30%（盖特）"),
     _e("魔法帝",   3, 8, {"magic_xp": 0.30, "soul_xp": 0.20}, "九阶魔法帝（推导）"),
     _e("魔法学院主任", 3, 12, {"magic_xp": 0.22, "soul_xp": 0.12}, "学院主任（八阶）"),
@@ -190,7 +193,7 @@ VOCATION_POOL = [
        "核心属性+20% 威压+25% 战斗直觉+20% 生命汲取+15%"),
     _e("皇帝",     4, 4, {"trade_bonus": 0.30, "soul_xp": 0.30, "deadline_bonus": 0.30},
        "威势+30% 智力+30% 洞察力+30%（马尔杜克）"),
-    _e("光辉",     4, 3, {"magic_xp": 0.20, "soul_xp": 0.10, "regen_bonus": 0.25},
+    _e("光辉",     4, 3, {"magic_xp": 0.20, "spell_power": 0.20, "soul_xp": 0.10, "regen_bonus": 0.25},
        "光系+20% 凝聚+10% 光元素亲和+30% 净化+25%（卡尔修斯）"),
 ]
 
@@ -291,6 +294,38 @@ AFFINITY_POOL = [
 #   则总人口觉醒率 ≈ 0.10 × 0.2 = 0.02。该 0.2 为**演示层参数**，非世界观数值。
 MAGE_POPULATION_SHARE = 0.20
 AWAKEN_RATE = 0.10 * MAGE_POPULATION_SHARE
+
+
+# ------------------------------------------------------------
+# 技能双轨（战斗 v1）：技能=魔法或剑法——体阶解锁剑法（耗精力），
+# 法阶解锁魔法（耗魔力）。直接操控元素力**不入公共技能表**：
+# 世界观中能直接操控元素力者极罕（「元素」魔力特性持有者 ≈0.36%，
+# bug 级强者），禀赋元素仅作法术风味调制（结算层 +5%）。
+# 纯数据零 RNG；power 为基准威力，结算层乘 位阶/职阶加成。
+# ------------------------------------------------------------
+SWORD_ARTS = [
+    {"name": "木剑式",   "rank": 1, "power": 10, "cost": 6},
+    {"name": "连斩",     "rank": 3, "power": 18, "cost": 10},
+    {"name": "破甲击",   "rank": 5, "power": 28, "cost": 15},
+    {"name": "剑气斩",   "rank": 7, "power": 42, "cost": 22},
+    {"name": "剑域",     "rank": 9, "power": 60, "cost": 30},
+]
+MAGIC_SPELLS = [
+    {"name": "魔力弹",   "rank": 1, "power": 9,  "cost": 6},
+    {"name": "魔光束",   "rank": 3, "power": 16, "cost": 10},
+    {"name": "聚能炮",   "rank": 5, "power": 26, "cost": 16},
+    {"name": "连锁咒",   "rank": 7, "power": 40, "cost": 24},
+    {"name": "禁咒·星陨", "rank": 9, "power": 58, "cost": 34},
+]
+
+
+def current_skill(rank, table):
+    """该轨当前可用的最高阶技能（阶不足返回 None；表按 rank 升序给出）。"""
+    best = None
+    for s in table:
+        if s["rank"] <= rank and (best is None or s["rank"] > best["rank"]):
+            best = s
+    return best
 
 
 # ------------------------------------------------------------

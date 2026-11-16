@@ -210,6 +210,9 @@ class StoryQuest:
                                                  c.get("mentor", "同门"))
         if m == "trade_distinct":
             return "与 %d 名不同的居民成交（结识人脉）" % c.get("count")
+        if m == "duel_win":
+            return "与 %s 切磋并获胜（剧情切磋·R 键，切磋无死亡）" % c.get(
+                "opponent_name", "同门")
         if m == "craft_n":
             return "创作 %d 件作品（PRODUCE 入 CAS）" % c.get("count")
         if m == "rank_reach":
@@ -298,9 +301,9 @@ FACTIONS = [
                  "lore": "[自创] 学院不收学费，收你的第一份作业：按你禀赋的元素备齐一篮材料。",
                  "mechanic": "gather_n", "count": 6}},
              {"name": "正式学员", "quest": {
-                 "qkey": "ac_s2", "title": "首件造物",
-                 "lore": "[自创] 正式学员的门槛：以自采之材完成第一件造物，指纹入库（CAS）。",
-                 "mechanic": "craft_n", "count": 1}},
+                 "qkey": "ac_s2", "title": "斗法之课",
+                 "lore": "[自创] 正式学员的门槛：与同门斗法一场——法术是法阶的证明；直接操控元素力者极罕，不在此课之列。",
+                 "mechanic": "duel_win"}},
              {"name": "学士", "quest": {
                  "qkey": "ac_s3", "title": "凝核进阶",
                  "lore": "[自创] 学士袍以法阶为线——魔核再进一阶，线色即变。",
@@ -336,9 +339,9 @@ FACTIONS = [
          "誓约高于性命，甲胄即是法律",
          [
              {"name": "侍从", "quest": {
-                 "qkey": "kn_s1", "title": "淬体之课",
-                 "lore": "[自创] 侍从的第一课不是剑，是体：把采集当成操练，把负重当成斋戒。",
-                 "mechanic": "gather_n", "count": 6}},
+                 "qkey": "kn_s1", "title": "入门切磋",
+                 "lore": "[自创] 侍从的第一课是剑：与同门切磋一场——招式见血汗，不见伤残（切磋无死亡）。",
+                 "mechanic": "duel_win"}},
              {"name": "见习骑士", "quest": {
                  "qkey": "kn_s2", "title": "晋阶之誓",
                  "lore": "[自创] 见习骑士的誓词以体阶为凭——体炼再进一阶，誓约才算落音。",
@@ -478,6 +481,18 @@ def _build_ctx(player, world, fkey, tpl, now) -> Dict[str, Any]:
         ctx["count"] = tpl["count"]
     elif m == "trade_distinct":
         ctx["count"] = tpl["count"]
+    elif m == "duel_win":
+        px, py = player.fx, player.fy
+        cands = [a for a in world.agents
+                 if a.alive and a.aid != player.pid]
+        if cands:
+            t = min(cands, key=lambda a: (round(
+                math.hypot(a.pos.x - px, a.pos.y - py), 4), a.aid))
+            ctx["npc_aid"] = t.aid
+            ctx["opponent_name"] = _npc_display(t)
+        else:
+            ctx["npc_aid"] = None
+            ctx["opponent_name"] = "同门"
     elif m == "craft_n":
         ctx["count"] = tpl["count"]
     elif m == "rank_reach":
@@ -511,6 +526,13 @@ def _mech_complete(player, world, q: StoryQuest) -> Optional[str]:
                                                c["since_tick"])}
         if len(ids) >= c["count"]:
             return "已与 %d 名居民成交" % len(ids)
+        return None
+    if m == "duel_win":
+        for e in _events_since(world, EventType.DUEL, player.pid, c["since_tick"]):
+            if e.target == c.get("npc_aid") and e.data.get("win"):
+                return "已胜 %s（%s 伤 %d）" % (c.get("opponent_name"),
+                                               e.data.get("skill"),
+                                               e.data.get("dmg", 0))
         return None
     if m == "craft_n":
         n = len(_events_since(world, EventType.PRODUCE, player.pid, c["since_tick"]))
@@ -774,7 +796,7 @@ def verify_story_pool() -> List[str]:
         problems.append("以下职阶无任何资格势力（只能走自由线）：%s" % uncovered)
     # 2) 每势力 4 阶位、每阶位一个模板、机制合法
     legal_mech = {"gather_n", "trade_distinct", "craft_n", "rank_reach",
-                  "wealth_reach", "build_first", "travel_away"}
+                  "wealth_reach", "build_first", "travel_away", "duel_win"}
     for f in FACTIONS:
         if len(f["stages"]) != 4:
             problems.append("势力 %s 阶位数=%d（应为 4）" % (f["key"], len(f["stages"])))
