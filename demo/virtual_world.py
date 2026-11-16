@@ -94,7 +94,7 @@ class AgentState(Enum):
 class EventType(Enum):
     TICK="tick"; BIRTH="birth"; DEATH="death"; MARRIAGE="marriage"
     PRODUCE="produce"; TRADE="trade"; INTERACT="interact"; REST="rest"
-    UBI="ubi"; TAX="tax"; VIOLATION="violation"; DUEL="duel"
+    UBI="ubi"; TAX="tax"; VIOLATION="violation"; DUEL="duel"; WORLD="world"
 
 @dataclass
 class Event:
@@ -596,7 +596,8 @@ class PlayerAgent:
         rng=world._rng
         rt=rng.choice(sorted(npc.inventory.keys()))
         price=rng.randint(5,20)
-        price=max(1,int(round(price*(1.0-self.vocation_effects.get("trade_bonus",0.0)))))   # 商人：交易-10%
+        price=max(1,int(round(price*(1.0-self.vocation_effects.get("trade_bonus",0.0))
+                           *world._event_mod("trade_price_mul",1.0))))   # 丰收节：市集让利
         if self.wealth>=price:
             self.wealth-=price; npc.wealth+=price
             self.inventory[rt]=self.inventory.get(rt,0)+1; npc.inventory[rt]-=1
@@ -666,9 +667,15 @@ class PlayerAgent:
         _e=self.vocation_effects
         _dr=1.0-_e.get("needs_resist",0.0)   # 冰/牧人/守林人：需求衰减减缓
         for n in self.needs:
-            self.needs[n]=max(0,self.needs[n]-NEED_DECAY.get(n,0.3)*0.5*_dr)
+            _m=(world._event_mod("physio_decay",1.0) if n=="physiology"
+                else world._event_mod("safety_decay",1.0) if n=="safety" else 1.0)
+            self.needs[n]=max(0,self.needs[n]-NEED_DECAY.get(n,0.3)*0.5*_dr*_m)
         if self.energy<15: self.needs["safety"]-=5
-        self.energy=max(0,self.energy-0.5*(1.0-_e.get("energy_cost",0.0)))
+        self.energy=max(0,self.energy-0.5*(1.0-_e.get("energy_cost",0.0))
+                        *world._event_mod("energy_decay",1.0))
+        self.mana=min(100,self.mana+world._event_add("mana_regen",0.0))            # 裂变余波
+        self.needs["belonging"]=min(100,self.needs["belonging"]
+                                    +world._event_add("belonging_gain",0.0))       # 丰收节
     def to_dict(self):
         return {"pid":self.pid,"fx":round(self.fx,2),"fy":round(self.fy,2),
             "wealth":self.wealth,"energy":self.energy,"mana":self.mana,"needs":self.needs,
@@ -890,6 +897,7 @@ class NohnWorld:
         # 全局唯一随机源：所有随机性必须经此，否则世界不可复现
         self._rng=random.Random(self.config.seed)
         self.agents=[]; self.resources=[]; self.buildings=[]; self.event_log=[]
+        self.world_events=[]   # 活跃世界事件：[{id,name,until,mods}]（确定性调度）
         self._agents_by_id={}; self._res_coords=set()
         self.reserve=EconomicReserve(initial_supply=self.config.initial_money_supply,
             ubi_amount=self.config.ubi_amount,tax_rate=self.config.tax_rate,
@@ -1358,7 +1366,8 @@ class NohnWorld:
         return ev
     def _regenerate_resources(self):
         for r in self.resources:
-            if r["amount"]<25 and self._rng.random()<r["regen_rate"]: r["amount"]+=2
+            if r["amount"]<25 and self._rng.random()<r["regen_rate"]:
+                r["amount"]+=max(0,int(round(2*self._event_mod("regen_scale",1.0))))
         if self._rng.random()<0.15 and len(self.resources)<self.size*self.size*0.08: self._spawn_resource()
     def _build_houses(self):
         for a in self.agents:
@@ -1385,8 +1394,54 @@ class NohnWorld:
                 ev.append(Event(eid=self.next_eid(),etype=EventType.VIOLATION,actor=a.aid,tick=self._tick,
                     data={"rule":"wealth_hardcap","penalty":tax}))
         return ev
+    # ---- 随机世界事件（确定性调度；零 RNG 消耗；效果经 _event_mod 被各系统消费）----
+    def _event_mod(self,key,default=1.0):
+        """活跃事件乘子叠加（同键多事件相乘）。default=乘子缺省值。"""
+        m=default
+        for e in self.world_events:
+            if key in e["mods"]: m*=e["mods"][key]
+        return m
+    def _event_add(self,key,default=0.0):
+        """加法叠加（增益类：belonging_gain/mana_regen 等）。
+        注意与 _event_mod（乘子）区分——加法键误用乘子接口且 default=0 时恒为零。"""
+        m=default
+        for e in self.world_events:
+            if key in e["mods"]: m+=e["mods"][key]
+        return m
+    def _step_world_events(self):
+        """过期结算 + 相位触发。触发式：(tick+seed*7+crc32(id))%interval==phase。
+        返回本 tick 产生的事件记录（入事件流，GUI feed 可见）。"""
+        out=[]
+        _keep=[]; _end=[]
+        for e in self.world_events:
+            if self._tick<e["until"]: _keep.append(e)
+            else: _end.append(e)
+        self.world_events=_keep
+        for e in _end:
+            _ev=Event(eid=self.next_eid(),etype=EventType.WORLD,actor="WORLD",
+                tick=self._tick,data={"event":e["id"],"name":e["name"],"phase":"end"})
+            self.event_log.append(_ev); self._record_event(_ev); out.append(_ev)
+        _seed=self.config.seed
+        for e in WORLD_EVENTS:
+            if any(x["id"]==e["id"] for x in self.world_events): continue
+            if (self._tick+_seed*7+zlib.crc32(e["id"].encode("utf-8")))%e["interval"]!=e["phase"]:
+                continue
+            _act={"id":e["id"],"name":e["name"],"until":self._tick+e["duration"],
+                  "mods":e["mods"]}
+            self.world_events.append(_act)
+            if e["id"]=="caravan":               # 商队入村：确定性选人补货（零 RNG）
+                _tr=sorted([a for a in self.agents if a.alive],key=lambda a:a.aid)[:2]
+                for a in _tr:
+                    a.inventory["fruit"]=a.inventory.get("fruit",0)+2
+                    a.inventory["wood"]=a.inventory.get("wood",0)+1
+            _ev=Event(eid=self.next_eid(),etype=EventType.WORLD,actor="WORLD",
+                tick=self._tick,data={"event":e["id"],"name":e["name"],
+                                      "desc":e["desc"],"phase":"start"})
+            self.event_log.append(_ev); self._record_event(_ev); out.append(_ev)
+        return out
     def tick(self):
         self._tick+=1; te=[]; alive=[a for a in self.agents if a.alive]
+        te.extend(self._step_world_events())
         self.temporal_substrate.tick()   # 构成公理二：全局时钟随世界推进，不可回退
         self._reindex_static()   # 资源/建筑位置在 tick 内不变，每 tick 重建即精确
         # 年龄以「岁」计：原先每 tick +1，本文件 tps=10 时第 80 tick 就进入老年死亡，社会必然瞬间灭绝
@@ -1398,6 +1453,7 @@ class NohnWorld:
             # 人格层推进放在 act 之后：读到的需求/能量是本 tick 结算后的值
             if a.persona is not None:
                 a.affect=a.persona.step(a,a._perceived)
+            a.needs["belonging"]=min(100.0,a.needs["belonging"]+self._event_add("belonging_gain",0.0))
         self._regenerate_resources(); self._build_houses()
         te.extend(self._check_reproduction()); te.extend(self._check_deaths()); te.extend(self._compliance_check())
         if self._tick%10==0: self._distribute_ubi()
@@ -1543,6 +1599,23 @@ def precompute_era(era_key,seed,config=None,snapshot_dir=".world_data/snapshots"
     for _ in range(target_tick): world.tick()
     with open(fp,'wb') as f: pickle.dump(world,f)
     return world
+
+WORLD_EVENTS=[  # 随机世界事件（确定性调度）：interval/phase 为 tick 相位，duration 生效时长
+    {"id":"festival","name":"丰收节","desc":"市集与歌声——交易让利，归属感上升",
+     "duration":120,"interval":900,"phase":120,
+     "mods":{"trade_price_mul":0.90,"belonging_gain":2.0}},
+    {"id":"drought","name":"旱灾","desc":"河床见底——资源再生减缓，生理衰减加快",
+     "duration":150,"interval":1100,"phase":430,
+     "mods":{"regen_scale":0.5,"physio_decay":1.3,"energy_decay":1.2}},
+    {"id":"cold","name":"寒潮","desc":"冰晶技师拉响警报——精力流失加快，安全感下滑",
+     "duration":100,"interval":1300,"phase":780,
+     "mods":{"energy_decay":1.5,"safety_decay":1.2}},
+    {"id":"caravan","name":"远方商队","desc":"商队入村，货架多了远方的货","duration":1,
+     "interval":1000,"phase":600,"mods":{}},
+    {"id":"rift_afterglow","name":"裂变余波","desc":"魔力潮汐——法核自行充能，法力源源不断",
+     "duration":80,"interval":1500,"phase":900,
+     "mods":{"mana_regen":2.0}},
+]
 
 def _replenish_era_population(world):
     """世代补齐（演示层设定）：纪元快进后把存活居民补齐到开局规模。
@@ -1691,7 +1764,7 @@ COLORS={"bg":(15,15,25),"grid":(35,35,50),
 GEN_COLORS=[(52,50,58),(150,92,208),(40,160,158),(196,104,40),(52,96,210),(176,52,116)]
 
 # 事件流标签与配色
-EVENT_LABEL={"birth":"出生","death":"死亡","marriage":"结婚","produce":"生产","trade":"交易",
+EVENT_LABEL={"world":"事件","birth":"出生","death":"死亡","marriage":"结婚","produce":"生产","trade":"交易",
     "interact":"社交","rest":"休息","ubi":"UBI","tax":"税收","violation":"违规"}
 EVENT_COLOR={"birth":(120,230,255),"death":(160,160,180),"marriage":(255,150,200),
     "trade":(80,255,180),"violation":(230,90,90)}
@@ -2496,6 +2569,10 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_tick=0, confi
         nonlocal last_wb
         for e in evts:
             v=e.etype.value
+            if v=="world":
+                feed.append("t%-5d ◆ 世界事件 %s：%s（%s）"%(
+                    e.tick,e.data.get("name",""),e.data.get("desc",""),
+                    "开始" if e.data.get("phase")=="start" else "结束"))
             if v in EVENT_LABEL:
                 feed.append("t%-5d %-4s %s%s"%(e.tick,EVENT_LABEL[v],e.actor,("->"+e.target) if e.target else ""))
             if v in ("marriage","death","trade","violation") and show_eventfx:
@@ -3202,6 +3279,19 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_tick=0, confi
                 KEYACT.clear(); KEYACT.update(_build_keyact())
             return True
         return True                                   # 弹窗内空白：吞掉
+    def draw_event_banner():
+        if not world.world_events: return
+        x=max(8,MAP_W//2-160); y=8
+        for ev in world.world_events:
+            rem=max(0,ev["until"]-world._tick)
+            t="%s · 剩余 %d"%(ev["name"],rem)
+            w=font_s.size(t)[0]+26
+            _bad=ev["id"] in ("drought","cold")
+            _rounded(screen,(x,y,w,24),(70,36,42) if _bad else (30,44,66),
+                     radius=8,outline=(190,110,90) if _bad else (110,140,190),ow=1,alpha=225)
+            screen.blit(font_s.render(t,True,
+                (255,170,150) if _bad else (255,214,130)),(x+13,y+4))
+            x+=w+10
     def draw_help_button():
         r=_help_btn_rect()
         _rounded(screen,r,(70,76,110) if help_dialog else (40,44,66),
@@ -3529,7 +3619,7 @@ def run_gui(tps=10, max_ticks=None, seed=0, screenshot=None, start_tick=0, confi
             screen.blit(_scaled,(int(ox),int(oy)))
         draw_stats(); draw_goal_panel(); draw_story_menu()
         if with_tooltip: draw_tooltip()
-        draw_help_button(); draw_help_dialog(); draw_context_menu()
+        draw_event_banner(); draw_help_button(); draw_help_dialog(); draw_context_menu()
         _view.present()
 
     _center_on_player()
