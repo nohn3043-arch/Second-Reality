@@ -123,7 +123,9 @@ EXPLICIT_QUALIFY = {
                  "毒药师", "厨师", "冰晶技师", "巡夜人"},
 }
 EFFECT_QUALIFY = {
-    "theocracy": {"soul_xp", "give_bonus"},
+    # 第二批：soul_xp 键已从职阶库删除（并入主轨 magic_xp）；天神教效果规则只剩 give_bonus，
+    # 原灵魂系职阶（医者/教区祭司/教区主教/大主教/慈悲者等）仍经显式名录保有资格，覆盖不破。
+    "theocracy": {"give_bonus"},
     "academy": {"magic_xp"},
     "guild": {"trade_bonus", "wealth_start"},
     "knights": {"body_xp"},
@@ -169,15 +171,18 @@ def _npc_display(a) -> str:
 # ============================================================
 
 def assign_npc_identity(a, world_seed) -> None:
-    """给一名 NPC 赋职阶/势力归属（派生态，运行时属性）。
-    已赋过（有 faction 属性）则跳过；子代降生后由引擎惰性补赋。"""
+    """给一名 NPC 赋势力归属（派生态，运行时属性）。
+    第二批：职阶已是世界账本态（降生时凡阶 35 池抽签、进 to_dict/state_hash），
+    此处不再覆写职阶——否则账本态与派生态打架，挂载/不挂载的 state_hash 必分歧；
+    仅旧世界（无职阶的 NPC）惰性补抽全池职阶。"""
     if getattr(a, "faction", None) is not None:
         return
     rng = random.Random("story:%s:%s" % (world_seed, a.aid))
-    e = voc.draw_vocation(rng)
-    a.vocation = e["name"]
-    a.vocation_tier = e["tier"]
-    a.vocation_effects = dict(e["effects"])
+    if getattr(a, "vocation", None) is None:
+        e = voc.draw_vocation(rng)
+        a.vocation = e["name"]
+        a.vocation_tier = e["tier"]
+        a.vocation_effects = dict(e["effects"])
     elig = eligible_factions(a.vocation, a.vocation_effects)
     a.faction = rng.choice(elig) if elig else FREELANCE_KEY
 
@@ -216,9 +221,8 @@ class StoryQuest:
         if m == "craft_n":
             return "创作 %d 件作品（PRODUCE 入 CAS）" % c.get("count")
         if m == "rank_reach":
-            return "位阶修至 %s 阶 %d（三成长·%s）" % (
-                {"magic": "法", "body": "体", "soul": "魂"}[c.get("kind", "magic")],
-                c.get("target"), c.get("kind"))
+            return "位阶修至 %d 阶（单主轨·%s）" % (
+                c.get("target"), c.get("kind", "magic"))
         if m == "wealth_reach":
             return "积攒资财至 %.0f" % c.get("target", 0)
         if m == "build_first":
@@ -498,8 +502,7 @@ def _build_ctx(player, world, fkey, tpl, now) -> Dict[str, Any]:
         ctx["count"] = tpl["count"]
     elif m == "rank_reach":
         kind = tpl["kind"]
-        cur = {"magic": player.magic_rank, "body": player.body_rank,
-               "soul": player.soul_strength}[kind]
+        cur = player.magic_rank        # 单主轨（第二批）：magic/body/soul 标签一律取主轨位阶
         ctx["kind"] = kind
         ctx["target"] = cur + tpl["delta"]
         ctx["baseline"] = cur
@@ -541,10 +544,9 @@ def _mech_complete(player, world, q: StoryQuest) -> Optional[str]:
             return "已完成 %d 件创作" % n
         return None
     if m == "rank_reach":
-        v = {"magic": player.magic_rank, "body": player.body_rank,
-             "soul": player.soul_strength}[c["kind"]]
+        v = player.magic_rank          # 单主轨（第二批）：一律取主轨位阶
         if v >= c["target"]:
-            return "%s 阶已达 %d" % (c["kind"], v)
+            return "位阶已达 %d 阶" % v
         return None
     if m == "wealth_reach":
         if player.wealth >= c["target"]:
@@ -770,8 +772,8 @@ class StoryWorld(GoalDrivenWorld):
         for a in self.agents:
             assign_npc_identity(a, self.config.seed)
 
-    def add_player(self, pid: str = "PLAYER"):
-        p = super().add_player(pid)
+    def add_player(self, pid: str = "PLAYER", route: str = "magic"):
+        p = super().add_player(pid, route=route)
         self.story_engine = StoryEngine(p, self)
         return p
 

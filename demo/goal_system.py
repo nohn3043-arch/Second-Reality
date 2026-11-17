@@ -663,8 +663,8 @@ class GoalDrivenWorld(NohnWorld):
         self.goal_generator: Optional[GoalGenerator] = None
         self.last_goal_transitions: List[dict] = []
 
-    def add_player(self, pid: str = "PLAYER"):
-        p = super().add_player(pid)
+    def add_player(self, pid: str = "PLAYER", route: str = "magic"):
+        p = super().add_player(pid, route=route)
         self.goal_generator = GoalGenerator(p, self, self.goal_config)
         return p
 

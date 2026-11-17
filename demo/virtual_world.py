@@ -115,8 +115,10 @@ class WorldConfig:
     ubi_amount:float=UBI_DAILY
     tax_rate:float=TAX_RATE
     wealth_hardcap_tax:float=WEALTH_HARDCAP_TAX
-    # 年龄语义：原先 1 tick = 1 岁，在 tps=10 的 GUI 下 80 岁只需 8 秒，社会第 80 tick 即开始灭绝
-    ticks_per_year:int=50               # 时间流速：10tps 下 1 年=5 真实秒（原 10=1 秒/年，老死过快）
+    # 年龄语义（2026-11-17 用户确认口径）：1 现实秒 = 1 游戏年（1tps 下 1 tick=1 岁）。
+    # 寿命/老死节奏与第二批「NPC 寿数 70±10」配套；历史教训（tps 高倍速下老死过快）
+    # 由 GUI 倍速上限 32× 与寿命系统接管，不再用拉长 ticks_per_year 压制。
+    ticks_per_year:int=1                # 时间流速：1 真实秒 = 1 游戏年（1:1 现实秒）
     adult_age:int=18; marriage_age:int=20
     birth_min_age:int=22; birth_max_age:int=60; elder_age:int=80
     # 婚姻/生育概率：原先是 _check_reproduction 内的字面量，改 config 无效（与 UBI/税率同类缺陷）
@@ -252,6 +254,11 @@ class NohnAgent:
     # 与世界观【元素生存法则】一致：元素是固有属性，特性是额外的稀有能力，两者分离。
     element:Optional[str]=None; element_note:Optional[str]=None
     affinity:Optional[str]=None; affinity_text:Optional[str]=None
+    # NPC 职阶（第二批）：普通职阶只从凡阶 35 池抽签（voc.draw_common_vocation），消费 world._rng；
+    # hp/寿数：寿数 70±10 年确定到点必死（_check_deaths 无概率分支）；hp 供吸血/补充机制（相邻≤2 格）。
+    vocation:Optional[str]=None; vocation_tier:int=0
+    vocation_effects:Dict[str,float]=field(default_factory=dict)
+    hp:float=100.0; max_age:int=80
     _perceived:List[dict]=field(default_factory=list,repr=False)
     # 拟人心理层：persona=引擎实例，affect=其可读标量视图。
     # 两者均不进入 to_dict()，故不改变世界状态哈希（人格层是派生态，不是账本态）。
@@ -262,6 +269,14 @@ class NohnAgent:
     # 视觉朝向（四向像素小人渲染用）：派生态，不入 to_dict()/state_hash()
     # （与 persona 同一口径：账本态之外的视觉派生，不破坏世界可复现性）
     facing:str=field(default="down",compare=False,repr=False)
+
+    # 渲染插值用的浮点坐标视图：NPC 位置是整数格（pos.x/y），fx/fy 为只读派生属性，
+    # 不是 dataclass 字段，故不入 to_dict()/state_hash()，世界可复现性不受影响。
+    # 子 tick 插值（_prev_pos 快照 / _render_xy 插值 / draw_agent_anim 步态判定）读它。
+    @property
+    def fx(self): return float(self.pos.x)
+    @property
+    def fy(self): return float(self.pos.y)
 
     def perceive(self, world):
         # 空间索引邻域查询，结果与全量扫描的顺序完全一致（按对象在各自列表中的
@@ -550,13 +565,18 @@ class PlayerAgent:
         # 权威来源：世界观【元素生存法则】。字段与 affinity 严格分离。
         self.element=None; self.element_note=None
         self.affinity=None                 # 魔力特性：稀有觉醒（demo/vocations.py，不分级）
-        self.magic_rank=1; self.magic_xp=0.0    # 法阶 1-10（学徒→半神）
-        self.body_rank=1;  self.body_xp=0.0     # 剑阶/体阶 1-10（剑士→半神）
-        self.soul_strength=1; self.soul_xp=0.0  # 灵魂强度（魔核→灵魂）
+        self.magic_rank=1; self.magic_xp=0.0    # 主轨=魔核强度（法师：冥想蕴养魔核；剑士：淬体入主轨）1-10
+        self.sword_rank=1; self.sword_xp=0.0    # 魔力环=剑士位阶（剑士路线专属：呼吸法用魔力蕴养心脏）
+        self.body_xp=0.0                        # 体能条（锁定：唯一来源=炼化精血，经「淬体」转入主轨）
+        self.hp=100.0                           # 生命值：寿命透支逐 tick 扣减，归零即死（hp_overdraw）
+        self.route="magic"                      # 开局修炼路线：magic=法师 / sword=剑士
+        self.alive=True                         # 玩家存活位（死亡唯一入口 _kill_player）
+        self.meditate_left=0; self.breathe_left=0   # 修炼进行中的剩余 tick（>0 时不可移动）
     @property
     def pos(self):
         return Position(int(round(self.fx)),int(round(self.fy)))
     def move(self, dx, dy, world_size):
+        if self.meditate_left>0 or self.breathe_left>0: return   # 修炼中不可移动（冥想/呼吸法占时）
         # 对角归一化：一倍速在任意方向都是 1 格/tick（旧实现对角为 √2 倍速）
         n=math.hypot(dx,dy)
         if n>0:
@@ -575,8 +595,11 @@ class PlayerAgent:
                 world.consume_resource(gx,gy,g)
                 if r["type"] in ("food","water","fruit"):
                     self.needs["physiology"]=min(100,self.needs["physiology"]+25*(1.0+_e.get("regen_bonus",0.0)))
+                if r["type"]=="crystal":        # 魔晶：采集回魔（法师路线收益更高）
+                    self.mana=min(self.mana_max(),self.mana
+                        +10*(1.25 if self.route=="magic" else 1.0)*(1.0+_e.get("gather_bonus",0.0)))
                 self.energy=max(0.0,self.energy-2*(1.0-_e.get("energy_cost",0.0)))   # 风/巡夜：省力
-                self.gain_xp("body",2)          # 三成长·体能：采集炼体
+                # 采集不再产 XP（用户口径：体能唯一来源=炼化精血；主轨来源=冥想/淬体）
                 return r["type"],g
         return None,0
     def build(self, world, btype="house"):
@@ -589,8 +612,7 @@ class PlayerAgent:
         world.buildings.append({"type":btype,"pos":(gx,gy),"owner":self.pid,"age":0})
         self.owned_buildings.append((gx,gy))
         self.needs["safety"]=min(100,self.needs["safety"]+15)
-        self.gain_xp("body",10)              # 三成长·体能：营造炼体
-        return True
+        return True          # 营造不再产 XP（用户口径：体能唯一来源=炼化精血）
     def trade(self, npc, world):
         if not npc or not npc.alive or not npc.inventory: return None
         rng=world._rng
@@ -621,7 +643,7 @@ class PlayerAgent:
         if self.inventory[_mat]<=0: del self.inventory[_mat]
         self.energy=max(0.0,self.energy-5)
         self.needs["self_actualization"]=min(100.0,self.needs["self_actualization"]+8)
-        self.gain_xp("magic",8)             # 三成长·魔力：创作凝练魔核
+        # 创作不再产 XP（用户口径：主轨来源=冥想/淬体；体能来源=精血炼化）
         _aid=None; _chash=None
         if getattr(world,"assets",None) is not None:
             _aid,_chash=world.assets.register("work",self.pid,
@@ -637,11 +659,11 @@ class PlayerAgent:
     # 直接操控元素力者极罕（「元素」魔力特性 ≈0.36% 抽中，bug 级），
     # 不入公共技能表；禀赋元素仅作法术风味调制（+5%）。
     def skill_loadout(self):
-        """双轨可用技能：剑法=体阶解锁（耗精力），魔法=法阶解锁（耗魔力）；
-        威力并入职阶效果（sword_power/spell_power）。"""
+        """技能表（路线不再限制技能·用户口径 2026-11-17）：剑法与魔法均由主轨位阶解锁
+        （剑法耗精力，魔法耗魔力）；威力并入职阶效果（sword_power/spell_power）。"""
         _e=self.vocation_effects
         out={}
-        sword=voc.current_skill(self.body_rank,voc.SWORD_ARTS)
+        sword=voc.current_skill(self.magic_rank,voc.SWORD_ARTS)
         spell=voc.current_skill(self.magic_rank,voc.MAGIC_SPELLS)
         if sword:
             out["sword"]={"name":sword["name"],"track":"sword",
@@ -660,10 +682,12 @@ class PlayerAgent:
         return sk["sword"] if sk["sword"]["power"]>=sk["spell"]["power"] else sk["spell"]
     def rest(self):
         _bd=self.vocation_effects.get("blood_drain",0.0)   # 吸血：以血补元
+        _mf=1.25 if self.route=="magic" else 1.0           # 法师路线：魔力池回复 +25%
         self.energy=min(100,self.energy+10*(1.0+self.vocation_effects.get("rest_bonus",0.0)+_bd))
-        self.mana=min(100,self.mana+30*(1.0+self.vocation_effects.get("rest_bonus",0.0)))
+        self.mana=min(self.mana_max(),self.mana+30*_mf*(1.0+self.vocation_effects.get("rest_bonus",0.0)))
         self.needs["safety"]=min(100,self.needs["safety"]+3+2*_bd)
     def tick(self, world):
+        if not getattr(self,"alive",True): return   # 已死亡（hp_overdraw/hp_drained）：停止一切行为
         _e=self.vocation_effects
         _dr=1.0-_e.get("needs_resist",0.0)   # 冰/牧人/守林人：需求衰减减缓
         for n in self.needs:
@@ -673,9 +697,96 @@ class PlayerAgent:
         if self.energy<15: self.needs["safety"]-=5
         self.energy=max(0,self.energy-0.5*(1.0-_e.get("energy_cost",0.0))
                         *world._event_mod("energy_decay",1.0))
-        self.mana=min(100,self.mana+world._event_add("mana_regen",0.0))            # 裂变余波
+        self.mana=min(self.mana_max(),self.mana+world._event_add("mana_regen",0.0))  # 裂变余波
         self.needs["belonging"]=min(100,self.needs["belonging"]
                                     +world._event_add("belonging_gain",0.0))       # 丰收节
+        self._cultivate_step()   # 修炼推进：冥想（法师·蕴养魔核）/ 呼吸法（剑士·蕴养心脏）
+    # ---- 修炼体系（用户口径 2026-11-17）----
+    # 法师·冥想法：吸收大气中的魔力蕴养魔核 → 涨魔核强度（=主轨阶位），同时回魔；
+    #   只占时间（若干 tick，不能边走边冥想），不耗精力与魔力。
+    # 剑士·呼吸法：用魔力蕴养心脏 → 涨魔力环（=剑士位阶），每 tick 消耗魔力。
+    # 剑士·精血炼化：炼化吸收魔兽精血/龙血改造体质 → 体能条 → 淬体 → 主轨。
+    MEDITATE_TICKS=10; BREATHE_TICKS=10
+    MEDITATE_XP=8.0; MEDITATE_MANA=8.0     # 每 tick 魔核成长 / 回魔
+    BREATHE_XP=8.0; BREATHE_MANA_COST=10.0 # 每 tick 魔力环成长 / 耗魔
+    BEAST_BLOOD_XP=30.0; DRAGON_BLOOD_XP=120.0
+
+    def mana_max(self):
+        """魔力池上限（用户口径）：100+20×(主轨阶位-1)，升阶即时回满。"""
+        return 100.0+20.0*(self.magic_rank-1)
+
+    UNLOCK_RANK=2      # 第二条成长线的解锁位阶（门槛不高：主轨 2 阶即可并行三线）
+
+    def apply_route(self,route):
+        """应用修炼路线（开局选定）：起手侧重 + 该路线主攻成长线起手可用。"""
+        if route not in ("magic","sword"): return False
+        self.route=route
+        if route=="sword":
+            self.body_xp+=10.0; self.speed*=1.05      # 剑士：体能起步 + 步履轻快
+        else:
+            self.magic_xp+=10.0                        # 法师：魔核起步
+        return True
+
+    def can_meditate(self):
+        """冥想（魔核线）：法师起手即用；剑士需主轨 UNLOCK_RANK 阶解锁（后期可并行）。"""
+        return self.route=="magic" or self.magic_rank>=self.UNLOCK_RANK
+
+    def can_breathe(self):
+        """呼吸法（魔力环线）：剑士起手即用；法师需主轨 UNLOCK_RANK 阶解锁。"""
+        return self.route=="sword" or self.magic_rank>=self.UNLOCK_RANK
+
+    def can_refine(self):
+        """炼化精血（体能线）：两路线皆可（体质改造人人可为）。"""
+        return True
+
+    def start_meditate(self):
+        """开始冥想：占 MEDITATE_TICKS 个 tick，期间不可移动（未解锁则 False）。"""
+        if not self.can_meditate() or self.meditate_left>0: return False
+        self.meditate_left=self.MEDITATE_TICKS
+        return True
+
+    def start_breathe(self):
+        """开始呼吸法：占 BREATHE_TICKS 个 tick，每 tick 耗魔力（未解锁则 False）。"""
+        if not self.can_breathe() or self.breathe_left>0: return False
+        if self.mana<self.BREATHE_MANA_COST: return False
+        self.breathe_left=self.BREATHE_TICKS
+        return True
+
+    def _cultivate_step(self):
+        """每 tick 推进修炼：冥想→魔核强度（主轨）+回魔；呼吸法→魔力环（剑士位阶）+耗魔。"""
+        if self.meditate_left>0:
+            _b=1.0+self._vocal("magic")
+            self.magic_xp+=self.MEDITATE_XP*_b
+            while self.magic_rank<10 and self.magic_xp>=self.RANK_XP[self.magic_rank]:
+                self.magic_rank+=1
+                self.mana=self.mana_max()      # 升阶回满
+            self.mana=min(self.mana_max(),self.mana+self.MEDITATE_MANA*_b)
+            self.meditate_left-=1
+        if self.breathe_left>0:
+            if self.mana>=self.BREATHE_MANA_COST:
+                self.mana-=self.BREATHE_MANA_COST
+                _b=1.0+self._vocal("sword")
+                self.sword_xp+=self.BREATHE_XP*_b
+                while self.sword_rank<10 and self.sword_xp>=self.RANK_XP[self.sword_rank]:
+                    self.sword_rank+=1
+            self.breathe_left-=1
+
+    def refine(self):
+        """精血炼化（体质唯一来源·用户口径）：炼化吸收魔兽精血/龙血改造体质。
+        魔兽精血 +30 体能；龙血（强大生物级）+120 体能。体能经「淬体」转入主轨。"""
+        if not self.can_refine(): return None,0.0
+        if self.inventory.get("beast_blood",0)>0:
+            self.inventory["beast_blood"]-=1
+            if self.inventory["beast_blood"]<=0: self.inventory.pop("beast_blood")
+            self.gain_xp("body",self.BEAST_BLOOD_XP)
+            return "魔兽精血",self.BEAST_BLOOD_XP
+        if self.inventory.get("dragon_blood",0)>0:
+            self.inventory["dragon_blood"]-=1
+            if self.inventory["dragon_blood"]<=0: self.inventory.pop("dragon_blood")
+            self.gain_xp("body",self.DRAGON_BLOOD_XP)
+            return "龙血",self.DRAGON_BLOOD_XP
+        return None,0.0
+
     def to_dict(self):
         return {"pid":self.pid,"fx":round(self.fx,2),"fy":round(self.fy,2),
             "wealth":self.wealth,"energy":self.energy,"mana":self.mana,"needs":self.needs,
@@ -683,8 +794,9 @@ class PlayerAgent:
             "action_mode":self.action_mode,"age":self.age,
             "vocation":self.vocation,"affinity":self.affinity,
             "element":self.element,
-            "magic_rank":self.magic_rank,"body_rank":self.body_rank,
-            "soul_strength":self.soul_strength}
+            "magic_rank":self.magic_rank,"sword_rank":self.sword_rank,
+            "route":self.route,"hp":round(self.hp,1),"body_xp":round(self.body_xp,1),
+            "sword_xp":round(self.sword_xp,1)}
 
     # ---- 居民化：与其他居民同一套经济节拍（同领 UBI、同缴税）----
     def receive_ubi(self,amt):
@@ -697,14 +809,16 @@ class PlayerAgent:
     # 世界观：职阶降生即知；魔力特性十分之一概率觉醒。
     MAGIC_TITLES={1:"学徒",2:"术士",3:"术士",4:"术师",5:"术师",6:"术师",7:"贤者",8:"圣者",9:"魔法帝",10:"半神"}
     SWORD_TITLES={1:"剑士",2:"剑士",3:"剑士",4:"剑士",5:"剑士",6:"大师",7:"剑尊",8:"剑圣",9:"剑帝",10:"半神"}
-    RANK_XP=[0,40,120,240,400,600,840,1120,1440,1800]   # 达成 n 阶所需累计经验（1-10）
+    RANK_XP=[0,40,120,240,400,600,1200,2400,4800,9600]  # 达成 n 阶所需累计经验（1-10，第二批：7 阶起累计翻倍）
+    # 寿命倒计时（第二批）：主轨阶位 → 自然寿限（年）。9/10 阶同取 100000（原表「8-10 阶 10000 / 9 阶+100000」重叠，
+    # 按「9 阶起 10 万」口径实现；阶位突破即时抬升寿限，已透支 HP 不回填，但停止透支扣血）。
+    LIFESPAN_BY_RANK={1:100,2:100,3:100,4:100,5:100,6:100,7:1000,8:10000,9:100000,10:100000}
 
     def birth_draw(self,rng):
-        """登录抽签=降生：先赋八元素（固有，人人有），再抽职阶（5 档稀有度），
-        最后掷魔力特性觉醒（稀有，不分级）；特性效果并入同一张加成表。
-        消费注入的 world._rng——同 seed 同抽签，世界可复现（确定性纪律）。"""
-        self.element=voc.draw_element(rng)
-        self.element_note=voc.ELEMENT_NOTES.get(self.element)
+        """登录抽签=降生：抽职阶（5 档稀有度）+ 掷魔力特性觉醒（稀有，不分级）；
+        特性效果并入同一张加成表。消费注入的 world._rng——同 seed 同抽签，世界可复现。
+        元素亲和（2026-11-17 口径修订）：属魔兽/龙族/魔族，人类（玩家/居民）没有——
+        玩家降生不再抽元素；draw_element 保留给未来的魔兽/龙族/魔族实体。"""
         e=voc.draw_vocation(rng)
         self.vocation=e["name"]; self.vocation_tier=e["tier"]
         self.vocation_effects=dict(e["effects"])
@@ -712,6 +826,9 @@ class PlayerAgent:
         if aff is not None:
             self.affinity=aff["name"]; self.affinity_tier=aff["tier"]
             self.affinity_text=aff["text"]
+            _el=voc.AFFINITY_ELEMENT.get(aff["name"])       # 元素亲和随特性同得（用户口径）
+            if _el:
+                self.element=_el; self.element_note=voc.ELEMENT_NOTES.get(_el)
             for _k,_v in aff["effects"].items():      # 特性效果并入同一张加成表
                 self.vocation_effects[_k]=self.vocation_effects.get(_k,0.0)+_v
         self.speed=1.0*(1.0+self.vocation_effects.get("speed_bonus",0.0))   # 一倍速基准；雷/风：移速加成
@@ -722,31 +839,45 @@ class PlayerAgent:
         return e.get(kind,0.0)+e.get("all",0.0)+e.get("growth",0.0)
 
     def gain_xp(self,kind,amount):
-        """三成长：魔力/体能/灵魂强度。XP 来源全部是可复算的玩家行为
-        （采集/建造/创作/赠予/遗产/目标完成）；法阶与剑阶并行不悖
-        （世界观：体阶与法阶分隔，无强制绑定）。"""
+        """成长轨（用户口径 2026-11-17）：magic/soul=主轨（魔核强度）；
+        sword=魔力环（剑士位阶，唯一来源=呼吸法）；body=体能条（锁定，
+        唯一来源=炼化精血，经「淬体」转入主轨）。"""
         amount=max(0.0,amount)*(1.0+self._vocal(kind))   # 职阶+特性效果已并入同一张加成表
-        if kind=="magic":
+        if kind in ("magic","soul"):
             self.magic_xp+=amount
             while self.magic_rank<10 and self.magic_xp>=self.RANK_XP[self.magic_rank]:
                 self.magic_rank+=1
+                self.mana=self.mana_max()      # 升阶回满（用户口径）
         elif kind=="body":
-            self.body_xp+=amount
-            while self.body_rank<10 and self.body_xp>=self.RANK_XP[self.body_rank]:
-                self.body_rank+=1
-        elif kind=="soul":
-            self.soul_xp+=amount
-            while self.soul_strength<10 and self.soul_xp>=self.RANK_XP[self.soul_strength]:
-                self.soul_strength+=1
+            self.body_xp+=amount        # 锁定：体能条，只积攒待淬体（唯一来源=精血炼化）
+        elif kind=="sword":
+            self.sword_xp+=amount        # 魔力环（剑士位阶）：唯一来源=呼吸法
+            while self.sword_rank<10 and self.sword_xp>=self.RANK_XP[self.sword_rank]:
+                self.sword_rank+=1
+
+    def cuit(self):
+        """淬体（主动，第二批）：把锁定的体能条按 1:1 淬入主轨（受职阶 growth 加成）。
+        体能条为空返回 0；成功返回淬入的主轨 XP。"""
+        if self.body_xp<=0: return 0.0
+        _amt=self.body_xp
+        self.body_xp=0.0
+        self.magic_xp+=_amt*(1.0+self._vocal("magic"))
+        while self.magic_rank<10 and self.magic_xp>=self.RANK_XP[self.magic_rank]:
+            self.magic_rank+=1
+            self.mana=self.mana_max()      # 升阶回满
+        return _amt
 
     def rank_title(self):
-        """位阶称谓（世界观位阶对照表）：法阶与剑阶并列展示，双路线同修。
-        前缀为八元素（固有属性），魔力特性另用「·特性名」标出（不分级）。"""
-        t="%d阶%s · %d阶%s"%(self.magic_rank,self.MAGIC_TITLES[self.magic_rank],
-                             self.body_rank,self.SWORD_TITLES[self.body_rank])
+        """位阶称谓（单主轨）：唯一阶位=主轨 magic_rank；
+        前缀=八元素（固有）·魔力特性（不分级）·修炼路线。"""
+        t="%d阶%s"%(self.magic_rank,self.MAGIC_TITLES[self.magic_rank])
+        if self.route=="sword":
+            t+=" · 魔力环%d阶%s"%(self.sword_rank,self.SWORD_TITLES[self.sword_rank])
         head=(self.element+"系") if self.element else ""
         if self.affinity:
             head=(head+"·"+self.affinity) if head else self.affinity
+        _rt=("法师" if self.route=="magic" else "剑士") if self.route else "未定"
+        head=(head+"·"+_rt) if head else _rt
         return (head+"｜"+t) if head else t
 
 # ============================================================
@@ -914,11 +1045,14 @@ class NohnWorld:
         self._reindex_static()
         self._complete_genesis()
         self.player=None; self.assets=AssetRegistry()
-    def add_player(self, pid="PLAYER"):
+    def add_player(self, pid="PLAYER", route="magic"):
+        """route=None 表示先抽签、路线稍后由玩家在路线屏选定（此时不施加路线起手）。"""
         self.player=PlayerAgent(pid=pid,world_size=self.size)
+        self.player.route=None
         # 居民化（无主角）：初始财富从世界创世储备划转（其他居民同源同额 100，
         # 行会商人等 wealth_start 职阶按倍率上浮）；玩家账户纳入守恒式。
-        self.player.birth_draw(self._rng)   # 先抽签（决定 wealth_start 等效果）
+        self.player.birth_draw(self._rng)   # 先抽签（职阶/元素/特性，决定 wealth_start 等效果）
+        if route is not None: self.player.apply_route(route)
         _start=int(round(100.0*(1.0+self.player.vocation_effects.get("wealth_start",0.0))))
         self.player.wealth=self.reserve.allocate_genesis(float(_start))
         return self.player
@@ -929,8 +1063,9 @@ class NohnWorld:
                 "pos":(self._rng.randint(0,self.size-1),self._rng.randint(0,self.size-1)),"age":0})
         for _ in range(self.config.initial_agents): self._spawn_agent()
     def _spawn_resource(self):
-        rt=self._rng.choices(["food","water","wood","stone","herb","ore","fruit"],
-            weights=[30,25,15,10,8,7,5])[0]
+        rt=self._rng.choices(["food","water","wood","stone","herb","ore","fruit",
+                              "crystal","beast_blood","dragon_blood"],
+            weights=[30,25,15,10,8,7,5,4,3,1])[0]
         # 资源坐标去重：原先同坐标可叠加多个资源，而 consume_resource 只扣首个，导致漏扣
         for _ in range(20):
             pos=(self._rng.randint(0,self.size-1),self._rng.randint(0,self.size-1))
@@ -947,14 +1082,22 @@ class NohnWorld:
             n=self._rng.choice(avail); self._used_names.add(n); return n
         # 超出 24 人：音节按组合序号确定性派生，绝不消耗 world._rng。
         # 这一点是关键：若在此多抽一次随机数，30 人以上世界的整条随机流会整体错位，
-        # 旧世界的 state_hash 会无理由改变（实测：多抽 3 次的版本哈希从 40bb3a1c 漂到 0b7760df）。
+        # 旧世界的 state_hash 会无理由改变（实测：多抽 3 次的哈希从 40bb3a1c 漂到 0b7760df）。
+        # 组合空间有界（30×15×5 去重后 2250 个）：用尽后必须数字后缀兜底，
+        # 否则旧的 while True 会永远自旋——alpha 纪元 5000 tick 约 3600 人，必然触顶卡死。
         A=NAME_SYLL_A; B=NAME_SYLL_B; C=NAME_SYLL_C
         k=len(self._used_names)-len(self.NAMES)
-        while True:
+        for _ in range(len(A)*len(B)*len(C)):
             n=(A[k%len(A)]+B[(k//len(A))%len(B)]+C[(k//(len(A)*len(B)))%len(C)])
-            if n not in self._used_names: break
+            if n not in self._used_names:
+                self._used_names.add(n); return n
             k+=1
-        self._used_names.add(n); return n
+        _base=A[0]+B[0]; _i=0
+        while True:
+            _m="%s%d"%(_base,_i)
+            if _m not in self._used_names:
+                self._used_names.add(_m); return _m
+            _i+=1
     def _spawn_agent(self, parent_ids=None, pos=None, age=None):
         rng=self._rng
         name=self._gen_name()
@@ -970,13 +1113,20 @@ class NohnWorld:
         a=NohnAgent(aid=aid,name=name,pos=pos,generation=gen,age=age,
             personality=make_personality(rng),skills=make_skills(rng),
             wealth=0.0 if parent_ids else rng.uniform(50,150))
-        # 降生：先赋八元素（人人有），再掷魔力特性觉醒（稀有，不分级）。
-        # 与玩家 birth_draw 同序消费 world._rng，保证世界可复现。
-        a.element=voc.draw_element(rng)
-        a.element_note=voc.ELEMENT_NOTES.get(a.element)
+        # 降生：掷魔力特性觉醒（稀有，不分级）。与玩家 birth_draw 同序消费 world._rng。
+        # 元素亲和随特性同得（2026-11-17 口径）：抽到带元素的特性才有，人族默认没有。
         _aff=voc.draw_affinity(rng)
         if _aff is not None:
             a.affinity=_aff["name"]; a.affinity_text=_aff["text"]
+            _el=voc.AFFINITY_ELEMENT.get(_aff["name"])   # 元素亲和随特性同得（用户口径）
+            if _el:
+                a.element=_el; a.element_note=voc.ELEMENT_NOTES.get(_el)
+        # NPC 普通职阶（第二批）：凡阶 35 池（谋生职业），消费同一 world._rng 保持可复现。
+        _nv=voc.draw_common_vocation(rng)
+        a.vocation=_nv["name"]; a.vocation_tier=_nv["tier"]
+        a.vocation_effects=dict(_nv["effects"])
+        # 寿数 70±10 年：确定到点必死（_check_deaths），无概率分支。
+        a.max_age=60+int(rng.random()*21)
         if parent_ids:
             # 生育必须是纯转移：父母各付出 per_parent，子代收 per_parent*人数（原版父各扣20、子只收10，每胎蒸发10）
             per_parent=10.0
@@ -989,7 +1139,11 @@ class NohnWorld:
             # 初始财富来自创世储备金划转，不新增货币
             a.wealth=self.reserve.allocate_genesis(a.wealth)
         # 人格层挂载：由 (world_seed, aid, 五维特质) 确定性构造，不消耗 world._rng
-        if self.config.persona_mode=="affect":
+        # 人格层挂载：由 (world_seed, aid, 五维特质) 确定性构造，不消耗 world._rng。
+        # 纪元预演期（demo_ff）跳过：预演中 1 tick=1 年、寿数到点必死 → spawn 数千次，
+        # 每次全量实例化人格+六模块栈会把预演拖到分钟级；人格是派生态（不进 state_hash），
+        # 预演补齐的居民不带人格不影响世界账本与哈希，预演结束后的正常降生照常挂载。
+        if self.config.persona_mode=="affect" and not getattr(self,"demo_ff",False):
             a.persona=build_persona(aid=aid,world_seed=self.config.seed,traits=a.personality)
             a.affect=a.persona.affect
             # 智能体栈：六模块全量实例化（身份取最强技能，目标取最缺口需求）
@@ -1037,7 +1191,7 @@ class NohnWorld:
             if attacker.mana < sk["cost"]: return None
             attacker.mana-=sk["cost"]
         def _def_rank(a):
-            r=getattr(a,"body_rank",None)
+            r=getattr(a,"magic_rank",None)   # 单主轨（第二批）：玩家防御位阶取主轨
             if r: return r
             return 1+0.5*(getattr(a,"vocation_tier",0) or 0)   # 居民位阶派生：1+0.5×职阶档
         def _def_tier(a):
@@ -1355,10 +1509,70 @@ class NohnWorld:
                     self._spawn_agent(parent_ids=(a.aid,p.aid),
                         pos=Position((a.pos.x+p.pos.x)//2,(a.pos.y+p.pos.y)//2),age=0)
         return ev
+    def _npc_hp_tick(self):
+        """HP 体系（第二批）：吸血/补充 + 玩家寿命透支扣血。
+        - 吸取：带 blood_drain 效果（吸血特性/魔王职阶）者每 tick 从 ≤2 格内最近活体
+          吸取 1+3×blood_drain 点 HP 据为己有（上限 100）；
+        - 补充：带 regen_bonus 者每 tick 自愈 0.5×(1+regen_bonus)；
+        - 玩家寿命倒计时：age≥寿限（LIFESPAN_BY_RANK）→ 每 tick 扣 2 HP；
+          HP≤0 死亡 cause=hp_overdraw，wealth 全额入国库（collect_fee，守恒不灭失）。
+        相邻判定：欧氏距离 ≤2 格；吸取对象含玩家。"""
+        ev=[]
+        alive=[a for a in self.agents if a.alive]
+        for a in alive:
+            _e=getattr(a,"vocation_effects",{}) or {}
+            _bd=_e.get("blood_drain",0.0)
+            if _bd>0 or getattr(a,"vocation",None)=="魔王":
+                _gain=1.0+3.0*max(_bd,0.15)
+                _best=None; _bdist=1e9; _ax,_ay=a.pos.x,a.pos.y
+                for t in alive:
+                    if t is a: continue
+                    _d=math.hypot(t.pos.x-_ax,t.pos.y-_ay)
+                    if _d<=2.0 and _d<_bdist and t.hp>0: _best=t; _bdist=_d
+                _p=self.player
+                if _p is not None and _p.alive:
+                    _d=math.hypot(_p.fx-_ax,_p.fy-_ay)
+                    if _d<=2.0 and _d<_bdist and _p.hp>0: _best=_p
+                if _best is not None:
+                    _take=min(_gain,_best.hp)
+                    _best.hp=max(0.0,_best.hp-_take)
+                    a.hp=min(100.0,a.hp+_take)
+                    if _best is self.player and _best.hp<=0.0:
+                        ev.extend(self._kill_player(_best,"hp_drained"))
+                    elif _best is not self.player and _best.hp<=0.0:
+                        _best.alive=False; _best.state=AgentState.DEAD; self._wd+=1
+                        self._unindex_agent(_best)
+                        ev.append(Event(eid=self.next_eid(),etype=EventType.DEATH,actor=_best.aid,
+                            tick=self._tick,data={"cause":"hp_drained","age":_best.age}))
+            _rg=_e.get("regen_bonus",0.0)
+            if _rg>0 and a.alive and a.hp<100.0:
+                a.hp=min(100.0,a.hp+0.5*(1.0+_rg))
+        p=self.player
+        if p is not None and p.alive:
+            if p.age>=self.player_lifespan():
+                p.hp=max(0.0,p.hp-2.0)     # 寿命倒计时归零：每 tick 扣 2 HP
+                if p.hp<=0.0:
+                    ev.extend(self._kill_player(p,"hp_overdraw"))
+        return ev
+
+    def player_lifespan(self):
+        """玩家当前寿限（年）：随主轨阶位即时抬升（LIFESPAN_BY_RANK）。"""
+        p=self.player
+        return p.LIFESPAN_BY_RANK.get(p.magic_rank,100) if p is not None else 100
+
+    def _kill_player(self,p,cause):
+        """玩家死亡（唯一入口）：wealth 全额入国库（collect_fee 为转移非灭失，守恒不破）。"""
+        p.alive=False; p.hp=0.0
+        if p.wealth>0: self.reserve.collect_fee(p.wealth); p.wealth=0.0
+        return [Event(eid=self.next_eid(),etype=EventType.DEATH,actor=p.pid,tick=self._tick,
+            data={"cause":cause,"age":p.age})]
+
     def _check_deaths(self):
+        """死亡结算（第二批）：NPC 寿数 70±10 确定到点必死（删除旧 80 岁概率分支）；
+        玩家寿命透支死亡在 _npc_hp_tick（hp_overdraw），此处只管 NPC。"""
         ev=[]
         for a in self.agents:
-            if a.alive and a.age>self.config.elder_age and self._rng.random()<0.05:
+            if a.alive and a.age>=a.max_age:
                 a.alive=False; a.state=AgentState.DEAD; self._wd+=1
                 self._unindex_agent(a)
                 ev.append(Event(eid=self.next_eid(),etype=EventType.DEATH,actor=a.aid,tick=self._tick,
@@ -1444,10 +1658,11 @@ class NohnWorld:
         te.extend(self._step_world_events())
         self.temporal_substrate.tick()   # 构成公理二：全局时钟随世界推进，不可回退
         self._reindex_static()   # 资源/建筑位置在 tick 内不变，每 tick 重建即精确
-        # 年龄以「岁」计：原先每 tick +1，本文件 tps=10 时第 80 tick 就进入老年死亡，社会必然瞬间灭绝
+        # 年龄以「岁」计：每 ticks_per_year tick +1（第二批口径：1 年 = 1 真实秒）。
+        # NPC 寿数 70±10 到点必死；玩家寿限随主轨阶位抬升（透支扣血见 _npc_hp_tick）。
         if self._tick%self.config.ticks_per_year==0:
             for a in alive: a.age+=1
-            if self.player is not None: self.player.age+=1   # 居民化：玩家同样老去（演示中不设玩家死亡，见 _check_deaths 边界）
+            if self.player is not None: self.player.age+=1   # 居民化：玩家同样老去（寿命结算见 _npc_hp_tick）
         for a in alive:
             a.perceive(self); d=a.think(self); te.extend(a.act(d,self))
             # 人格层推进放在 act 之后：读到的需求/能量是本 tick 结算后的值
@@ -1457,7 +1672,11 @@ class NohnWorld:
         self._regenerate_resources(); self._build_houses()
         if not getattr(self,"demo_ff",False):   # 纪元预演期冻结生育：人口由世代补齐维持（防指数爆炸）
             te.extend(self._check_reproduction())
-        te.extend(self._check_deaths()); te.extend(self._compliance_check())
+        te.extend(self._npc_hp_tick()); te.extend(self._check_deaths()); te.extend(self._compliance_check())
+        if self._tick%max(1,self.config.ticks_per_year*5)==0:
+            # 世代补齐（每 5 年）：寿数 70±10 到点必死后常态维持开局规模——
+            # 与纪元预演同口径（_replenish_era_population 只补缺口、消费 world._rng，确定性）。
+            _replenish_era_population(self)
         if self._tick%10==0: self._distribute_ubi()
         if self._tick%30==0: self._collect_taxes()
         if self._tick%50==0: self._apply_inflation()
@@ -1487,7 +1706,8 @@ class NohnWorld:
             "resources":len(self.resources),"buildings":len(self.buildings),
             "money_supply":self.reserve.money_supply,"inflation_rate":self.reserve.inflation_rate,
             "treasury":self.reserve.treasury,
-            "money_residual":self.reserve.invariant_residual(self.agents),
+            "money_residual":self.reserve.invariant_residual(
+                self.agents+([self.player] if self.player is not None else [])),
             "ubi_cycles":self._ubi_cycle,"violations":sum(a.violations for a in self.agents)}
     def get_simulation_metrics(self):
         """仿真自评指标（7 维，仅供演示与回归对照）。
@@ -1579,7 +1799,7 @@ class EraCalendar:
             if e["key"]==key: return e
         return None
     @classmethod
-    def tick_to_date(cls,tick,ticks_per_year=10):
+    def tick_to_date(cls,tick,ticks_per_year=1):
         for i in range(len(cls.ERAS)-1,-1,-1):
             era=cls.ERAS[i]
             if tick>=era["start_tick"]:
@@ -1747,6 +1967,7 @@ PAL={"ink":(38,34,44),"skin":(255,226,200),
 COLORS={"bg":(15,15,25),"grid":(35,35,50),
     "food":(80,180,80),"water":(60,140,220),"wood":(120,80,40),
     "stone":(130,130,140),"herb":(80,200,130),"ore":(160,120,80),"fruit":(220,140,60),
+    "crystal":(120,180,255),"beast_blood":(180,50,70),"dragon_blood":(220,160,50),
     "house":(160,120,80),"market":(180,160,60),"workshop":(140,100,60),
     "garden":(80,180,80),"library":(130,110,200),
     "agent_idle":(190,192,200),"agent_working":(240,196,72),
@@ -1781,7 +2002,8 @@ CJK_FONT_FILES=[r"C:\Windows\Fonts\msyh.ttc",r"C:\Windows\Fonts\msyhbd.ttc",
 STATE_LABELS={"idle":"空闲","working":"工作","socializing":"社交","resting":"休息",
     "trading":"交易","learning":"学习","creating":"创造"}
 RES_LABELS={"food":"食物","water":"水","wood":"木材","stone":"石料",
-    "herb":"草药","ore":"矿石","fruit":"水果"}
+    "herb":"草药","ore":"矿石","fruit":"水果",
+    "crystal":"魔晶","beast_blood":"魔兽精血","dragon_blood":"龙血"}
 BLD_LABELS={"house":"住宅","market":"集市","workshop":"工坊","garden":"花园","library":"图书馆"}
 
 BUILDING_STYLE={"house":{"h":34,"top":(216,118,106),"wall":(226,170,132)},
@@ -2295,6 +2517,15 @@ def draw_resource_anim(screen,overlay,r):
         pygame.draw.polygon(_surf,ink,[(gxp-3,gyp),(gxp-1,gyp-5),(gxp+3,gyp-4),(gxp+4,gyp+1),(gxp, gyp+2)])
         pygame.draw.polygon(_surf,(150,110,190),[(gxp-3,gyp),(gxp-1,gyp-5),(gxp+3,gyp-4),(gxp+4,gyp+1),(gxp, gyp+2)])
         pygame.draw.line(_surf,(238,238,255),(gxp-1,gyp-4),(gxp+2,gyp+1),1)
+    elif t=="crystal":  # 魔晶（采集回魔）
+        pygame.draw.polygon(_surf,ink,[(gxp,gyp-6),(gxp+4,gyp),(gxp,gyp+5),(gxp-4,gyp)])
+        pygame.draw.polygon(_surf,(120,180,255),[(gxp,gyp-4),(gxp+3,gyp),(gxp,gyp+3),(gxp-3,gyp)])
+        pygame.draw.line(_surf,(220,240,255),(gxp,gyp-4),(gxp,gyp-1),1)
+    elif t in ("beast_blood","dragon_blood"):   # 精血/龙血（炼化改造体质）
+        _bc=(180,50,70) if t=="beast_blood" else (220,160,50)
+        pygame.draw.rect(_surf,ink,(gxp-3,gyp-5,6,9),border_radius=2)
+        pygame.draw.rect(_surf,_bc,(gxp-2,gyp-4,4,7),border_radius=1)
+        pygame.draw.rect(_surf,ink,(gxp-2,gyp-8,4,3),border_radius=1)
     screen.blit(pygame.transform.scale(_surf,(56,56)),(rgx-28,rgy-44))
     _draw_shadow(overlay,rgx,rgy,16,5)
 
@@ -2416,65 +2647,291 @@ def draw_agent_anim(screen,overlay,a,selected,tick,world,warn_surf,font=None,all
     if _line:
         draw_speech_bubble(screen,font,gxp,gyp-60,_line)
 
-def run_era_selection(seed=0):
+_EFF_CN={"gather_bonus":"采集","herb_bonus":"草药","regen_bonus":"进食回复","energy_cost":"省力",
+         "build_bonus":"建造","trade_bonus":"交易","trade_radius":"交易范围","give_bonus":"赠予",
+         "magic_xp":"魔核","body_xp":"体能","all":"全属性","growth":"成长","speed_bonus":"移速",
+         "needs_resist":"抗衰减","rest_bonus":"休息","wealth_start":"家资","deadline_bonus":"目标期限",
+         "blood_drain":"吸血","sword_power":"剑威","spell_power":"法术"}   # 效果键中文名（抽签屏展示用）
+
+def _make_sky(seed,w,h):
+    """构造静态星空底（按 seed 确定性）+ 闪烁星列表。深空背景，供开局三屏共用。"""
+    import random
+    surf=pygame.Surface((w,h))
+    surf.fill((7,9,18))
+    _r=random.Random("sky:%d"%seed)
+    for _ in range(4):                      # 星云：多层递减 alpha 的同心圆（避免硬边）
+        cx=_r.randrange(w); cy=_r.randrange(h); rad=_r.randint(140,300)
+        col=[(28,40,110),(52,30,96),(18,60,92),(70,44,40)][_r.randrange(4)]
+        for _k in range(6):
+            rr=int(rad*(1.0-0.14*_k))
+            if rr<=0: break
+            _s=pygame.Surface((w,h),pygame.SRCALPHA)
+            pygame.draw.circle(_s,col+(9,),(cx,cy),rr)
+            surf.blit(_s,(0,0))
+    tw=[]
+    for _ in range(190):
+        x=_r.randrange(w); y=_r.randrange(h); b=_r.randint(70,235)
+        pygame.draw.circle(surf,(b,b,min(255,b+25)),(x,y),_r.choice([1,1,1,2]))
+        if _r.random()<0.12: tw.append((x,y,b))
+    return surf,tw
+
+def _draw_sky(screen,sky,tw,tick):
+    """贴星空底 + 少量星星呼吸闪烁（静态底只画一次，闪烁星逐帧重画）。"""
+    screen.blit(sky,(0,0))
+    for i,(x,y,b) in enumerate(tw):
+        _a=0.35+0.65*abs(math.sin(tick*0.03+i*1.7))
+        pygame.draw.circle(screen,(int(b*_a),int(b*_a),min(255,int(b*_a)+25)),(x,y),1)
+
+def run_era_selection(seed=0, snap=None):
+    """历史纪元选择（深空星图版）：星轨上的节点=纪元，越古远离当下越远（左端最古远）；
+    右侧详情面板展示纪元说明与预演成本；←→ 选节点，Enter 确认，ESC 跳过（默认当下）。
+    snap=路径时只渲染一帧存图后返回（UI 预览用）。"""
     import pygame, os
     pygame.init()
-    SW,SH=760,620
+    SW,SH=960,640
     screen=pygame.display.set_mode((SW,SH))
     pygame.display.set_caption("选择历史纪元 — 恩利尔大陆")
     def _lf(sz,b=False):
         for p in CJK_FONT_FILES:
             if os.path.exists(p):
                 try:
-                    f=pygame.font.Font(p,sz); f.set_bold(b); return f
+                    f=pygame.font.Font(p,sz)
+                    if b: f.set_bold(True)
+                    return f
                 except Exception: pass
-        return pygame.font.SysFont("microsoftyahei,simhei,arial",sz,bold=b)
-    ft=_lf(22,True); fm=_lf(14); fs=_lf(12); fh=_lf(13,True)
-    eras=EraCalendar.ERAS; sel=0
-    CW,CH=350,120; COLS=2; SX=20; SY=70; GAP=12
-    pal_bg=(20,22,30); pal_card=(40,44,58); pal_sel=(80,76,30)
-    pal_title=(230,210,120); pal_text=(200,200,210); pal_dim=(130,130,145)
-    pal_gold=(255,210,80); pal_hint=(160,160,175)
-    clock=pygame.time.Clock()
+        try: return pygame.font.SysFont("microsoftyahei,simhei,arial",sz,bold=b)
+        except Exception: return pygame.font.Font(None,sz+2)
+    ft=_lf(21,True); fn=_lf(13,True); fs=_lf(11); fd=_lf(12)
+    sky,tw=_make_sky(seed,SW,SH)
+    eras=EraCalendar.ERAS; n=len(eras); sel=n-1
+    GOLD=(255,210,90); DIM=(150,158,180); TEXT=(214,220,232); HINT=(140,148,170)
+    # 星轨：左端=最古远（神代），右端=当下（阿尔法纪）；沿弧线排布
+    X0,X1=110,600; YC=330
+    def _pos(i):
+        t=i/float(n-1)
+        return (X0+(X1-X0)*t, YC-120*t+46*math.sin(t*math.pi))
+    pts=[_pos(i) for i in range(n)]
+    clock=pygame.time.Clock(); tick=0
     while True:
+        tick+=1
         for ev in pygame.event.get():
-            if ev.type==pygame.QUIT: pygame.quit(); return "present"
+            if ev.type==pygame.QUIT: pygame.quit(); return "alpha"
             if ev.type==pygame.KEYDOWN:
-                if ev.key==pygame.K_ESCAPE: pygame.quit(); return "present"
-                if ev.key in (pygame.K_UP,pygame.K_w):
-                    sel=(sel-COLS)%len(eras)
-                elif ev.key in (pygame.K_DOWN,pygame.K_s):
-                    sel=(sel+COLS)%len(eras)
-                elif ev.key in (pygame.K_LEFT,pygame.K_a):
-                    sel=(sel-1)%len(eras)
-                elif ev.key in (pygame.K_RIGHT,pygame.K_d):
-                    sel=(sel+1)%len(eras)
+                if ev.key==pygame.K_ESCAPE: pygame.quit(); return "alpha"
+                if ev.key in (pygame.K_LEFT,pygame.K_a,pygame.K_UP,pygame.K_w):
+                    sel=(sel-1)%n
+                elif ev.key in (pygame.K_RIGHT,pygame.K_d,pygame.K_DOWN,pygame.K_s):
+                    sel=(sel+1)%n
                 elif ev.key in (pygame.K_RETURN,pygame.K_SPACE):
                     pygame.quit(); return eras[sel]["key"]
-        screen.fill(pal_bg)
-        screen.blit(ft.render("选择历史纪元 — 恩利尔大陆",True,pal_title),(SX,18))
-        screen.blit(fs.render("seed=%d  ·  箭元越古远，预演越久，世界状态越演化"%seed,True,pal_dim),(SX,46))
-        for i,e in enumerate(eras):
-            cx=SX+(i%COLS)*(CW+GAP); cy=SY+(i//COLS)*(CH+GAP)
-            bg=pal_sel if i==sel else pal_card
-            pygame.draw.rect(screen,bg,(cx,cy,CW,CH),border_radius=8)
-            if i==sel: pygame.draw.rect(screen,pal_gold,(cx,cy,CW,CH),width=2,border_radius=8)
-            screen.blit(fh.render(e["name"],True,pal_gold if i==sel else pal_title),(cx+12,cy+8))
-            ya=cy+38
-            for j in range(0,len(e["desc"]),22):
-                screen.blit(fm.render(e["desc"][j:j+22],True,pal_text),(cx+12,ya)); ya+=18
-            ya+=4
-            if e["alpha_years_ago"]>0:
-                ya_text="距今 %d 万年前"%e["alpha_years_ago"]
+        _draw_sky(screen,sky,tw,tick)
+        screen.blit(ft.render("选择历史纪元",True,GOLD),(60,34))
+        screen.blit(fs.render("恩利尔大陆 · seed=%d · 越古远的纪元在星轨上离当下越远，预演越久"%seed,True,DIM),(60,64))
+        # 星轨线
+        pygame.draw.lines(screen,(70,84,130),False,pts,2)
+        for i,(x,y) in enumerate(pts):
+            e=eras[i]; _sel=(i==sel)
+            _r=13 if _sel else 9
+            if _sel:                                   # 选中：金色光环 + 呼吸光晕
+                _p=0.5+0.5*math.sin(tick*0.08)
+                _s=pygame.Surface((SW,SH),pygame.SRCALPHA)
+                pygame.draw.circle(_s,(255,210,90,int(40+70*_p)),(int(x),int(y)),int(26+8*_p))
+                screen.blit(_s,(0,0))
+                pygame.draw.circle(screen,GOLD,(int(x),int(y)),_r,2)
+            pygame.draw.circle(screen,(235,240,255) if _sel else (170,180,205),(int(x),int(y)),_r-4)
+            # 标签上下错位（相邻节点不撞字）；远古年份折算成「亿年」更可读
+            _up=(i%2==1)
+            _ya_txt=("距今 %.0f 亿年"%(e["alpha_years_ago"]/10000.0)) if e["alpha_years_ago"]>=10000 \
+                else (("距今 %d 万年"%e["alpha_years_ago"]) if e["alpha_years_ago"]>0 else "当下")
+            _nm=fn.render(e["name"],True,GOLD if _sel else TEXT)
+            _ya=fs.render(_ya_txt,True,DIM)
+            _ny=(y-34-_nm.get_height()) if _up else (y+16)
+            _yy=(y-34-_nm.get_height()-_ya.get_height()) if _up else (y+16+_nm.get_height())
+            screen.blit(_nm,(int(x-_nm.get_width()/2),int(_ny)))
+            screen.blit(_ya,(int(x-_ya.get_width()/2),int(_yy)))
+        # 详情面板
+        e=eras[sel]
+        _rounded(screen,(640,120,290,300),(14,17,30),radius=12,outline=(96,106,150),ow=1,alpha=235)
+        screen.blit(fd.render(e["name"],True,GOLD),(656,134))
+        _ya_txt=("距今 %d 万年前"%e["alpha_years_ago"]) if e["alpha_years_ago"]>0 else "阿尔法纪 · 当下"
+        screen.blit(fs.render(_ya_txt,True,DIM),(656,158))
+        screen.blit(fs.render("预演成本 %d tick"%e["start_tick"],True,DIM),(656,176))
+        pygame.draw.line(screen,(70,80,120),(656,198),(916,198))
+        _yy=210
+        for _line in _wrap_text(e["desc"],258,fs):
+            screen.blit(fs.render(_line,True,TEXT),(656,_yy)); _yy+=16
+        screen.blit(fs.render("Enter 确认 · ESC 跳过（默认当下）",True,HINT),(60,SH-34))
+        pygame.display.flip()
+        if snap:
+            pygame.image.save(screen,snap); pygame.quit(); return "alpha"
+        clock.tick(30)
+
+def run_birth_reveal(player, screen=None, snap=None):
+    """降生抽签揭示（只抽两样）：职阶 + 魔力特性。
+    元素亲和不单列——它随职阶或魔力特性同抽同得（用户口径 2026-11-17）；
+    魔力特性觉醒率极低（演示层 ≈2%），多数时候显示「未觉醒」。
+    screen=None 时自开窗口；传入 screen 则画为游戏窗口上的全屏浮层（不夺显示）。
+    snap=路径时只渲染一帧存图后返回（UI 预览用）。"""
+    import pygame, os
+    if screen is None:
+        pygame.init()
+        screen=pygame.display.set_mode((780,560))
+        pygame.display.set_caption("降生抽签 — 职阶与魔力特性")
+    SW,SH=screen.get_width(),screen.get_height()
+    def _lf(sz,b=False):
+        for p in CJK_FONT_FILES:
+            if os.path.exists(p):
+                try:
+                    f=pygame.font.Font(p,sz)
+                    if b: f.set_bold(True)
+                    return f
+                except Exception: pass
+        try: return pygame.font.SysFont("microsoftyahei,simhei,arial",sz,bold=b)
+        except Exception: return pygame.font.Font(None,sz+2)
+    ft=_lf(20,True); fn=_lf(15,True); fs=_lf(12)
+    sky,tw=_make_sky(7,SW,SH)
+    GOLD=(255,210,90); DIM=(150,158,180); TEXT=(214,220,232); HINT=(140,148,170)
+    _voc=getattr(player,"vocation",None)
+    _tier=getattr(player,"vocation_tier",None)
+    _rar=voc.RARITY_NAMES.get(_tier,"凡阶") if _tier is not None else "凡阶"
+    _eff="、".join("%s %s"%(_EFF_CN.get(k,k),
+                            ("%d%%"%int(v*100)) if k in ("energy_cost","needs_resist") else "+%d%%"%int(v*100))
+                   for k,v in sorted((getattr(player,"vocation_effects",{}) or {}).items()))
+    _aff=getattr(player,"affinity",None)
+    clock=pygame.time.Clock(); tick=0
+    while True:
+        tick+=1
+        if snap: tick=40          # 预览：直接落到揭示完成的帧
+        for ev in pygame.event.get():
+            if ev.type==pygame.QUIT:
+                if screen is None: pygame.quit()
+                return
+            if ev.type==pygame.KEYDOWN:
+                if ev.key in (pygame.K_RETURN,pygame.K_SPACE,pygame.K_ESCAPE):
+                    if screen is None: pygame.quit()
+                    return
+        _draw_sky(screen,sky,tw,tick)
+        screen.blit(ft.render("降生抽签",True,GOLD),(SW//2-60,26))
+        screen.blit(fs.render("抽两样：职阶 · 魔力特性（元素亲和随其中同得）",True,DIM),(SW//2-140,54))
+        _k=min(1.0,tick/26.0)                    # 揭示动画：卡片淡入微缩放
+        _w,_h=int(440*_k),int(240*_k)
+        _cx,_cy=SW//2-_w//2,120
+        _rounded(screen,(_cx,_cy,_w,_h),(18,20,36),radius=14,outline=GOLD,ow=2,alpha=240)
+        if _k>=1.0:
+            screen.blit(fn.render("职阶：%s（%s）"%(_voc or "未抽签",_rar),True,GOLD),(SW//2-170,_cy+24))
+            screen.blit(fs.render(("加成："+_eff) if _eff else "加成：无",True,TEXT),(SW//2-170,_cy+54))
+            if _aff:
+                screen.blit(fn.render("魔力特性：%s"%_aff,True,(200,160,255)),(SW//2-170,_cy+96))
+                screen.blit(fs.render(getattr(player,"affinity_text",""),True,DIM),(SW//2-170,_cy+120))
             else:
-                ya_text="阿尔法纪 · 当下"
-            screen.blit(fs.render(ya_text,True,pal_dim),(cx+12,ya))
-            screen.blit(fs.render("预演 %d tick"%e["start_tick"],True,pal_dim),(cx+12,ya+16))
-        screen.blit(fs.render("↑↓←→ 选择  ·  Enter 确认  ·  ESC 跳过(默认当下)",True,pal_hint),(SX,SH-28))
-        pygame.display.flip(); clock.tick(30)
+                screen.blit(fn.render("魔力特性：未觉醒",True,(150,158,180)),(SW//2-170,_cy+96))
+                screen.blit(fs.render("十分之一者才有——本次你不在其中",True,DIM),(SW//2-170,_cy+120))
+        else:
+            screen.blit(fs.render("抽签中…",True,DIM),(SW//2-24,_cy+110))
+        screen.blit(fs.render("Enter / ESC 继续",True,HINT),(SW//2-60,SH-34))
+        pygame.display.flip()
+        if snap:
+            pygame.image.save(screen,snap)
+            if screen is None: pygame.quit()
+            return
+        clock.tick(30)
+
+def run_route_selection(seed=0, screen=None, snap=None):
+    """修炼路线选择（深空版，与纪元星图同一视觉语言）：
+    法师=冥想法主攻魔核；剑士=呼吸法主攻魔力环；两条都带体质改造（炼化精血）。
+    主轨 2 阶解锁另一条成长线 → 后期可三线并行（魔力+体能+魔核）。
+    screen=None 时自开窗口；传入 screen 则画为游戏窗口上的全屏浮层（不夺显示）。
+    snap=路径时只渲染一帧存图后返回（UI 预览用）。"""
+    import pygame, os
+    if screen is None:
+        pygame.init()
+        screen=pygame.display.set_mode((900,600))
+        pygame.display.set_caption("选择修炼路线 — 法师 / 剑士")
+    SW,SH=screen.get_width(),screen.get_height()
+    def _lf(sz,b=False):
+        for p in CJK_FONT_FILES:
+            if os.path.exists(p):
+                try:
+                    f=pygame.font.Font(p,sz)
+                    if b: f.set_bold(True)
+                    return f
+                except Exception: pass
+        try: return pygame.font.SysFont("microsoftyahei,simhei,arial",sz,bold=b)
+        except Exception: return pygame.font.Font(None,sz+2)
+    ft=_lf(19,True); fn=_lf(16,True); fs=_lf(11)
+    sky,tw=_make_sky(seed+1,SW,SH)
+    GOLD=(255,210,90); DIM=(150,158,180); TEXT=(214,220,232); HINT=(140,148,170)
+    routes=[("magic","法师","冥想法 · 蕴养魔核","魔核+10 · 魔力池回复+25%",
+             "冥想（魔核）· 炼化（体能）· 2 阶后解锁呼吸法（魔力环）"),
+            ("sword","剑士","呼吸法 · 蕴养心脏","体能+10 · 移速+5%",
+             "呼吸法（魔力环）· 炼化（体能）· 2 阶后解锁冥想（魔核）")]
+    sel=0; clock=pygame.time.Clock(); tick=0
+    while True:
+        tick+=1
+        for ev in pygame.event.get():
+            if ev.type==pygame.QUIT:
+                if screen is None: pygame.quit()
+                return "magic"
+            if ev.type==pygame.KEYDOWN:
+                if ev.key==pygame.K_ESCAPE:
+                    if screen is None: pygame.quit()
+                    return "magic"
+                if ev.key in (pygame.K_UP,pygame.K_w,pygame.K_LEFT,pygame.K_a): sel=0
+                elif ev.key in (pygame.K_DOWN,pygame.K_s,pygame.K_RIGHT,pygame.K_d): sel=1
+                elif ev.key in (pygame.K_RETURN,pygame.K_SPACE):
+                    if screen is None: pygame.quit()
+                    return routes[sel][0]
+        _draw_sky(screen,sky,tw,tick)
+        screen.blit(ft.render("选择修炼路线",True,GOLD),(SW//2-80,28))
+        screen.blit(fs.render("路线决定起手侧重；主轨 2 阶解锁另一条成长线，后期可三线并行",True,DIM),(SW//2-230,58))
+        for i,(_k,name,l1,l2,l3) in enumerate(routes):
+            cx=90+i*380; cy=118; w,h=300,206
+            _sel=(i==sel)
+            if _sel:
+                _p=0.5+0.5*math.sin(tick*0.08)
+                _s=pygame.Surface((SW,SH),pygame.SRCALPHA)
+                pygame.draw.rect(_s,(255,210,90,int(22+38*_p)),(cx-6,cy-6,w+12,h+12),border_radius=18)
+                screen.blit(_s,(0,0))
+            _rounded(screen,(cx,cy,w,h),(20,23,40) if _sel else (14,16,28),radius=14,
+                     outline=GOLD if _sel else (78,86,124),ow=2 if _sel else 1,alpha=238)
+            screen.blit(fn.render(name,True,GOLD if _sel else TEXT),(cx+24,cy+20))
+            screen.blit(fs.render(l1,True,(200,210,235)),(cx+24,cy+58))
+            screen.blit(fs.render("起手："+l2,True,DIM),(cx+24,cy+80))
+            pygame.draw.line(screen,(70,80,120),(cx+24,cy+106),(cx+w-24,cy+106))
+            for j,_ln in enumerate(_wrap_text(l3,w-48,fs)):
+                screen.blit(fs.render(_ln,True,DIM),(cx+24,cy+118+j*16))
+        screen.blit(fs.render("← → 选择 · Enter 确认 · ESC 默认法师",True,HINT),(SW//2-120,SH-34))
+        pygame.display.flip()
+        if snap:
+            pygame.image.save(screen,snap)
+            if screen is None: pygame.quit()
+            return "magic"
+        clock.tick(30)
+
+def _wrap_text(txt,wpx,font):
+    """按像素宽硬折行（路线卡片描述用，无标点断句依赖）。"""
+    out=[]; cur=""
+    for ch in txt:
+        if font.size(cur+ch)[0]>wpx and cur: out.append(cur); cur=ch
+        else: cur+=ch
+    if cur: out.append(cur)
+    return out
+
+def render_ui_previews(outdir="ui_preview", seed=0):
+    """生成开局三屏预览图（纪元星图 / 抽签揭示 / 路线选择），供 UI 走查。"""
+    import os as _os
+    _os.makedirs(outdir,exist_ok=True)
+    os.environ.setdefault("SDL_VIDEODRIVER","dummy")
+    run_era_selection(seed=seed, snap=_os.path.join(outdir,"ui_era.png"))
+    _w=NohnWorld(WorldConfig(world_size=24,initial_agents=4,initial_resources=6,
+                             initial_buildings=1,seed=seed))
+    _p=_w.add_player(route=None)
+    run_birth_reveal(_p, snap=_os.path.join(outdir,"ui_birth.png"))
+    run_route_selection(seed=seed, snap=_os.path.join(outdir,"ui_route.png"))
+    print("UI 预览已生成：%s"%_os.path.abspath(outdir))
 
 def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config=None,
-            auto_story=False, fullscreen=False):
+            auto_story=False, fullscreen=False, route=None, auto_birth=False):
     global WW,WH,MAP_W,MAP_H,PANEL_W,STATS_H    # 布局随窗口尺寸重算（HUD 读的是这几个）
     import pygame
     from collections import deque
@@ -2491,6 +2948,8 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
     WW,WH=_view.size
     zoom_auto=True
     cam_x=0.0; cam_y=0.0
+    cam_free=False                            # 自由镜头（M）：True 时解除相机软跟随
+    _btn_rects={}                          # 玩家卡按钮的面板局部矩形（绘制时刷新）：action→(x,y,w,h)
     panel_surf=None; panel_scroll=0; panel_content_h=0   # 右侧面板离屏画布 + 滚动
     import os
     def _load_font(size,bold=False):
@@ -2547,14 +3006,32 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
             world.tick()
             if world._tick-_lr>=world.config.ticks_per_year*5:
                 _replenish_era_population(world); _lr=world._tick   # 每 5 年世代补齐
+            if (_+1)%100==0:
+                # 防未响应：预演在主线程同步跑，必须泵事件并把进度画上窗口
+                # （否则 Windows 约 5 秒即标记「未响应」，观感=打不开游戏）
+                pygame.event.pump()
+                screen.fill((16,18,30))
+                _r=font_t.render("纪元预演 %d / %d tick …"%(world._tick,start_tick),True,(245,200,90))
+                screen.blit(_r,(screen.get_width()//2-_r.get_width()//2,
+                                screen.get_height()//2-_r.get_height()//2))
+                pygame.display.flip()
             if (_+1)%1000==0:
                 print("[era] 预演进度 %d/%d"%(world._tick,start_tick),flush=True)
         world.demo_ff=False
         _rp=_replenish_era_population(world)   # 世代补齐：新迁入一代补至开局规模
         print("[era] 预演完成：tick=%d 存活居民=%d（世代补齐 +%d）"%(
             world._tick,len([a for a in world.agents if a.alive]),_rp),flush=True)
-    player=world.add_player()
+    # 降生流程（用户口径）：纪元 → 抽签（职阶+魔力特性）→ 选修炼路线 → 进入游戏
+    if auto_birth:                          # 无人值守（截图/自动化）：跳过抽签屏与路线屏
+        player=world.add_player(route=route or "magic")
+    else:
+        player=world.add_player(route=None)
     player.facing=math.pi/2                  # 初始面朝下（像素小人四向）
+    if not auto_birth:
+        run_birth_reveal(player, screen=screen)            # 抽签揭示（画在游戏窗口上）
+        if route is None: route=run_route_selection(seed=seed, screen=screen)
+        if route is None: route="magic"
+        player.apply_route(route)
     player_walk_phase=0.0
     drag=None                          # 左键/右键/中键拖拽平移相机（点击另走 _do_click）
     click_fx=[0,0,0]                   # 点击脉冲：[gx,gy,剩余帧]
@@ -2922,24 +3399,66 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
             True,PAL["text_dim"]),(px+10,y)); y+=_lhM+1
         if world.player:
             p=world.player
-            _rounded(screen,(px+8,y,pw-16,186),(44,40,28),radius=8,outline=PAL["gold"],ow=1)
+            _rounded(screen,(px+8,y,pw-16,348),(44,40,28),radius=8,outline=PAL["gold"],ow=1)   # 加高：HP/寿命/魔力/主轨/魔力环/体能/成长线 7 项
             _voc=("%s ·%s"%(p.vocation,voc.RARITY_NAMES.get(p.vocation_tier,"凡阶"))) if p.vocation else "未抽签"
             # 魔力特性不分级：不再显示稀有度后缀，只显示名称与效果
             _aff=((p.affinity+("｜"+p.affinity_text if p.affinity_text else ""))) if p.affinity else "未觉醒"
             _elm=p.element if p.element else "—"
-            screen.blit(font_b.render("◆ 你（玩家）｜元素：%s"%_elm,True,PAL["gold"]),(px+16,y+5)); y+=19
+            screen.blit(font_b.render("◆ 你（玩家）｜元素亲和：%s"%_elm,True,PAL["gold"]),(px+16,y+5)); y+=19
             screen.blit(font_b.render(_fit_text("职阶：%s"%_voc,pw-32,font_b),True,
                 voc.RARITY_COLORS.get(p.vocation_tier,(225,232,248))),(px+16,y)); y+=18
             screen.blit(font_s.render(_fit_text("魔力特性：%s"%_aff,pw-32,font_s),True,(170,190,225)),(px+16,y)); y+=_lhS
             screen.blit(font_s.render("位阶：%s"%p.rank_title(),True,(255,238,150)),(px+16,y)); y+=_lhS
-            for _lab,_val in (("魔力",p.magic_rank),("体能",p.body_rank),("灵魂",p.soul_strength)):
-                screen.blit(font_s.render("%s %d"%(_lab,_val),True,PAL["text"]),(px+16,y))
-                draw_need_bar(px+58,y,_val/10.0*100,pw-96,h=7); y+=_lhS
-            y+=2
-            screen.blit(font.render(_fit_text("坐标: (%.1f, %.1f)  精力: %.0f/%.0f  魔力: %.0f  年龄: %d"%(p.fx,p.fy,p.energy,100,p.mana,p.age),pw-20,font),True,PAL["text"]),(px+10,y)); y+=_lhM
+            # —— 生存/成长显示（用户口径 2026-11-17）：HP+寿命倒计时 / 魔力池(上限随阶) /
+            #     主轨(魔核强度) / 魔力环(剑士位阶) / 体能(锁定) + 淬体·冥想·呼吸·炼化 ——
+            _lifespan=p.LIFESPAN_BY_RANK.get(p.magic_rank,100)
+            _rem=max(0,_lifespan-p.age)
+            _hp_col=(150,255,190) if p.hp>50 else ((255,200,90) if p.hp>25 else (255,120,110))
+            screen.blit(font_s.render("HP %.0f/100   寿命余 %d 年%s"%(
+                p.hp,_rem,"（透支！每秒-2）" if _rem<=0 else ""),True,_hp_col),(px+16,y))
+            draw_need_bar(px+16,y+13,p.hp,pw-32,h=6); y+=26
+            screen.blit(font_s.render("魔力池 %.0f/%.0f"%(p.mana,p.mana_max()),True,(150,190,250)),(px+16,y))
+            draw_need_bar(px+16,y+13,100.0*p.mana/max(1.0,p.mana_max()),pw-32,h=6); y+=26
+            _nx=p.RANK_XP[p.magic_rank] if p.magic_rank<10 else 0
+            _pv=p.RANK_XP[p.magic_rank-1]
+            _frac=100.0 if p.magic_rank>=10 else 100.0*(p.magic_xp-_pv)/max(1.0,_nx-_pv)
+            screen.blit(font_s.render("主轨(魔核强度) %d阶%s  XP %.0f/%s"%(
+                p.magic_rank,p.MAGIC_TITLES[p.magic_rank],p.magic_xp,
+                str(_nx) if p.magic_rank<10 else "MAX"),True,(255,238,150)),(px+16,y))
+            draw_need_bar(px+16,y+13,min(100.0,_frac),pw-32,h=6); y+=26
+            if p.route=="sword":                       # 魔力环 = 剑士位阶（呼吸法所养）
+                _sx=p.RANK_XP[p.sword_rank] if p.sword_rank<10 else 0
+                _sp=p.RANK_XP[p.sword_rank-1]
+                _sf=100.0 if p.sword_rank>=10 else 100.0*(p.sword_xp-_sp)/max(1.0,_sx-_sp)
+                screen.blit(font_s.render("魔力环 %d阶%s  XP %.0f/%s"%(
+                    p.sword_rank,p.SWORD_TITLES[p.sword_rank],p.sword_xp,
+                    str(_sx) if p.sword_rank<10 else "MAX"),True,(200,160,255)),(px+16,y))
+                draw_need_bar(px+16,y+13,min(100.0,_sf),pw-32,h=6); y+=26
+            screen.blit(font_s.render("体能(锁定·精血炼化) %.0f"%p.body_xp,True,(168,178,198)),(px+16,y))
+            draw_need_bar(px+16,y+13,min(100.0,p.body_xp/120.0*100),pw-32,h=6); y+=18
+            _gl="成长线：冥想%s 呼吸%s 炼化%s（2 阶解锁第二线）"%(
+                "✓" if p.can_meditate() else "✕",
+                "✓" if p.can_breathe() else "✕",
+                "✓" if p.can_refine() else "✕")
+            screen.blit(font_s.render(_gl,True,(168,178,198)),(px+16,y)); y+=_lhS
+            _btn_rects.clear(); _bx=px+16
+            for _bid,_blab,_bon in (("cuit","淬体(K)",p.body_xp>0),
+                                    ("meditate","冥想(Y)",p.route=="magic"),
+                                    ("breathe","呼吸(O)",p.route=="sword"),
+                                    ("refine","炼化(J)",True)):
+                _r=(_bx,y,72,15)
+                _btn_rects[_bid]=_r
+                _rounded(screen,_r,(70,76,110) if _bon else (40,44,66),radius=6,outline=(100,108,150),ow=1)
+                screen.blit(font_s.render(_blab,True,(255,220,140) if _bon else (118,126,155)),(_r[0]+7,_r[1]+1))
+                _bx+=76
+            if p.meditate_left>0 or p.breathe_left>0:
+                screen.blit(font_s.render("修炼中：冥想 %d tick · 呼吸法 %d tick"%(
+                    p.meditate_left,p.breathe_left),True,(255,214,130)),(px+16,y+16)); y+=_lhS
+            y+=_lhS+2
+            screen.blit(font.render(_fit_text("坐标: (%.1f, %.1f)  精力: %.0f/%.0f  年龄: %d"%(p.fx,p.fy,p.energy,100,p.age),pw-20,font),True,PAL["text"]),(px+10,y)); y+=_lhM
             screen.blit(font.render(_fit_text("财富: %.0f  模式: %s"%(p.wealth,p.action_mode),pw-20,font),True,PAL["text"]),(px+10,y)); y+=_lhM
             if build_mode: screen.blit(font_s.render("建造: %s (左键放置, B切换)"%build_type,True,(140,170,215)),(px+10,y)); y+=_lhS
-            inv_str=str(dict(p.inventory)) if p.inventory else "无"
+            inv_str=str({RES_LABELS.get(k,k):v for k,v in p.inventory.items()}) if p.inventory else "无"
             screen.blit(font_s.render(_fit_text("背包: "+inv_str,pw-20,font_s),True,PAL["text_dim"]),(px+10,y)); y+=_lhS
             if p.owned_buildings: screen.blit(font_s.render("资产: %d 处房产"%len(p.owned_buildings),True,(255,220,100)),(px+10,y)); y+=_lhS
         s=world.get_stats()
@@ -3176,12 +3695,14 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
         shot="second_reality_%06d.png"%world._tick
         pygame.image.save(screen,shot); print("Screenshot saved: "+shot)
     def _act_reset():
-        nonlocal world,player,selected,story_menu
+        nonlocal world,player,selected,story_menu,route
         world=story_mod.StoryWorld(config)
-        for _ in range(start_tick): world.tick()   # 重开回同纪元（与启动口径一致）
+        for _i in range(start_tick):               # 重开回同纪元（与启动口径一致）
+            world.tick()
+            if (_i+1)%100==0: pygame.event.pump()  # 预演同口径：泵事件防「未响应」
         _replenish_era_population(world)           # 世代补齐（重开同口径）
         _LORE_ANCHOR.clear()                       # 传说现身锚点随世界重置
-        player=world.add_player()
+        player=world.add_player(route=route)
         selected=None; fx.clear(); feed.clear(); story_menu=None
     def _act_help():
         nonlocal help_dialog
@@ -3224,6 +3745,41 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
         build_type=bt_list[(bi+1)%len(bt_list)]
     def _act_trademode():
         player.action_mode="trade" if player.action_mode!="trade" else "observe"
+    def _act_cuit():
+        _amt=player.cuit()
+        if _amt>0:
+            feed.append("淬体：体能 %.0f → 主轨"%_amt)
+            spawn_fx(int(round(player.fx)),int(round(player.fy)),"✦",(255,200,120))
+        else:
+            feed.append("体能条为空，无需淬体")
+    def _act_meditate():
+        if player.route!="magic":
+            feed.append("冥想法是法师的魔核修炼法（剑士请用呼吸法）"); return
+        if player.start_meditate():
+            feed.append("冥想开始：吸收大气魔力蕴养魔核（%d tick）"%player.MEDITATE_TICKS)
+        else:
+            feed.append("冥想进行中，暂不能再次入定")
+    def _act_breathe():
+        if player.route!="sword":
+            feed.append("呼吸法是剑士的魔力环修炼法（法师请用冥想）"); return
+        if player.start_breathe():
+            feed.append("呼吸法开始：用魔力蕴养心脏（%d tick）"%player.BREATHE_TICKS)
+        else:
+            feed.append("魔力不足或呼吸法进行中")
+    def _act_refine():
+        _n,_a=player.refine()
+        if _n:
+            feed.append("炼化 %s：体质改造 体能 +%.0f（淬体可转入主轨）"%(_n,_a))
+            spawn_fx(int(round(player.fx)),int(round(player.fy)),"❂",(230,120,110))
+        else:
+            feed.append("背包里没有魔兽精血/龙血")
+    def _act_cam_free():
+        nonlocal cam_free
+        cam_free=not cam_free
+        feed.append("自由镜头：%s"%("开（解除跟随）" if cam_free else "关（恢复跟随）"))
+
+    _btn_act={"cuit":_act_cuit,"meditate":_act_meditate,
+              "breathe":_act_breathe,"refine":_act_refine}   # 玩家卡按钮 → 动作
 
     KEYBINDS=[  # (action_id, 键标签, pygame 键|None, 说明, 类别, 动作)
         ("move","WASD/方向键",None,"移动（长按）","基础",None),
@@ -3251,6 +3807,11 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
         ("story","U",pygame.K_u,"剧情菜单","交互",_act_story),
         ("build","Q",pygame.K_q,"建造模式开关","交互",_act_build),
         ("buildtype","B",pygame.K_b,"建造类型切换（建造模式中）","交互",_act_buildtype),
+        ("cuit","K",pygame.K_k,"淬体（体能→主轨）","交互",_act_cuit),
+        ("meditate","Y",pygame.K_y,"冥想（法师·蕴养魔核，占时）","交互",_act_meditate),
+        ("breathe","O",pygame.K_o,"呼吸法（剑士·蕴养心脏，耗魔力）","交互",_act_breathe),
+        ("refine","J",pygame.K_j,"炼化精血（改造体质→体能）","交互",_act_refine),
+        ("cam_free","M",pygame.K_m,"自由镜头（解除/恢复跟随）","视角",_act_cam_free),
         ("trademode","T",pygame.K_t,"交易模式切换","交互",_act_trademode),
     ]
     KEY_ALIAS={pygame.K_F1:"help",pygame.K_KP_PLUS:"speed_up",
@@ -3755,6 +4316,13 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
                 if ev.pos[0]<MAP_W and ev.pos[1]<MAP_H:
                     if ctx_menu is not None and _ctx_ui_hit(*ev.pos): continue
                     if _help_ui_hit(*ev.pos): continue   # 弹窗 UI 吞掉点击（不进拖拽）
+                _btn_hit=False
+                if ev.button==1 and _btn_rects:            # 玩家卡按钮（面板局部坐标换算）
+                    _lx,_ly=ev.pos[0]-MAP_W,ev.pos[1]+panel_scroll
+                    for _bid,_r in list(_btn_rects.items()):
+                        if _lx>=0 and pygame.Rect(_r).collidepoint(_lx,_ly):
+                            _btn_act.get(_bid,lambda:None)(); _btn_hit=True; break
+                if _btn_hit: continue
                 drag=[ev.pos[0],ev.pos[1],cam_x,cam_y,ev.button,False]
             elif ev.type==pygame.MOUSEBUTTONUP and ev.button in (1,2,3):
                 if drag is not None and drag[4]==1 and not drag[5]:
@@ -3775,7 +4343,7 @@ def run_gui(tps=1, max_ticks=None, seed=0, screenshot=None, start_tick=0, config
         if story_menu is not None or help_dialog or ctx_menu is not None:
             dx=dy=0          # 弹窗/菜单态：封锁方向键移动（W/S 在菜单里是导航）
         _dt=clock.tick(60)/1000.0                  # 渲染恒 60fps：输入/浮字/悬停与仿真解耦
-        if drag is None and world.player:          # 相机软跟随玩家（拖拽镜头时让位）
+        if drag is None and not cam_free and world.player:   # 相机软跟随玩家（自由镜头/拖拽时让位）
             _px,_py=grid_ground(player.fx,player.fy)
             _tx=_px-MAP_W/(2.0*zoom); _ty=_py-MAP_H/(2.0*zoom)
             _k=min(1.0,_dt*6.0)
@@ -3934,8 +4502,10 @@ if __name__=="__main__":
     ap.add_argument("--ticks",type=int,default=1000,help="ticks to simulate (headless / determinism / screenshot)")
     ap.add_argument("--seed",type=int,default=0,help="world RNG seed; same seed + same config => reproducible")
     ap.add_argument("--era",metavar="KEY",default=None,
-        help="开局纪元 key（genesis/theocracy/schism/academy/mingyir/ayyas/alpha_dawn/present）。"
+        help="开局纪元 key（genesis/theocracy/schism/academy/mingyir/ayyas/alpha）。"
              "纪元=快进至该纪元 start_tick 的已演化世界；GUI 未指定时先弹纪元选择界面")
+    ap.add_argument("--route",choices=["magic","sword"],default=None,
+        help="开局修炼路线（magic=法师 / sword=剑士）；GUI 未指定时弹选择界面")
     ap.add_argument("--metrics",action="store_true",
         help="print machine-readable simulation self-metrics (NOT the constitutional 25-dim audit)")
     ap.add_argument("--verify-determinism",action="store_true",
@@ -3947,6 +4517,8 @@ if __name__=="__main__":
                     help="screenshot 模式：自动入线并打开剧情菜单（GUI 验收用）")
     ap.add_argument("--screenshot",metavar="PATH",
         help="render one frame to PNG and exit (no display needed: forces SDL_VIDEODRIVER=dummy)")
+    ap.add_argument("--ui-preview",metavar="DIR",default=None,
+        help="生成开局三屏预览图（纪元星图 / 抽签揭示 / 路线选择）到 DIR 后退出")
     ap.add_argument("--agents",type=int,default=None,
         help="人口规模（如 1000）。给定后自动配平 world-size / 资源 / 建筑；不给定则沿用旧默认 30")
     ap.add_argument("--world-size",type=int,default=None,help="地图边长（格）；1000 人建议 200")
@@ -3976,11 +4548,14 @@ if __name__=="__main__":
     if args.era is not None and EraCalendar.get_era(args.era) is None:
         raise SystemExit("未知纪元：%s（可选：%s）"%(
             args.era,",".join(e["key"] for e in EraCalendar.ERAS)))
+    if args.ui_preview:
+        render_ui_previews(args.ui_preview, seed=args.seed)
+        raise SystemExit(0)
     if args.screenshot:
         os.environ.setdefault("SDL_VIDEODRIVER","dummy")   # 必须在 pygame.init() 之前设置
         if args.window: os.environ["SRDEMO_WINDOW"]=args.window
         run_gui(tps=args.tps,seed=args.seed,max_ticks=args.ticks,screenshot=args.screenshot,config=demo_cfg,
-                auto_story=args.auto_story,
+                auto_story=args.auto_story,route=args.route or "magic",auto_birth=True,
                 start_tick=EraCalendar.get_era(args.era)["start_tick"] if args.era else 0)
         raise SystemExit(0)
     _print_demo_note(demo_cfg)
@@ -3989,9 +4564,10 @@ if __name__=="__main__":
         world=run_headless(args.ticks,verbose=True,seed=args.seed,config=demo_cfg,
                            start_tick=EraCalendar.get_era(args.era)["start_tick"] if args.era else 0)
     else:
-        _era=args.era or run_era_selection(seed=args.seed)   # GUI 未指定纪元 → 先弹选择界面
+        _era=args.era or run_era_selection(seed=args.seed)   # GUI 未指定纪元 → 先弹星图选择
+        # 路线选择移入 run_gui：开局流程 = 纪元 → 抽签（职阶+特性）→ 路线
         world=run_gui(tps=args.tps,seed=args.seed,config=demo_cfg,fullscreen=args.fullscreen,
-                      start_tick=EraCalendar.get_era(_era)["start_tick"])
+                      start_tick=EraCalendar.get_era(_era)["start_tick"],route=args.route)
     if args.metrics:
         print(json.dumps(world.get_simulation_metrics(),ensure_ascii=False,indent=2,default=str))
     if args.audit:

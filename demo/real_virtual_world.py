@@ -592,10 +592,10 @@ class RealStoryWorld(RealWorld):
         for _a in self.agents:
             _story_mod.assign_npc_identity(_a, self.config.seed)
 
-    def add_player(self, pid: str = "PLAYER"):
+    def add_player(self, pid: str = "PLAYER", route: str = "magic"):
         import goal_system as _goal_mod
         import factions as _story_mod
-        _p = super().add_player(pid)
+        _p = super().add_player(pid, route=route)
         self.goal_generator = _goal_mod.GoalGenerator(_p, self, self.goal_config)
         self.story_engine = _story_mod.StoryEngine(_p, self)
         return _p

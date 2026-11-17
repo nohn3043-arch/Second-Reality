@@ -485,24 +485,80 @@ check("居民同领 UBI（tick 10 后 +10）", abs(p1.wealth - _w0 - 10.0) < 1e-
 check("UBI 后守恒仍成立", _eco.conservation_holds())
 
 p1.gain_xp("body", 40)
-check("体能 40 XP → 剑阶 2（剑士）", p1.body_rank == 2)
+check("体能 40 XP → 锁定体能条（无剑阶，单主轨）",
+      p1.body_xp >= 40 and not hasattr(p1, "body_rank"))
 p1.gain_xp("magic", 120)
-check("魔力 120 XP → 法阶 3（术士）", p1.magic_rank == 3
+check("魔力 120 XP → 主轨 3 阶（术士）", p1.magic_rank == 3
       and p1.MAGIC_TITLES[3] == "术士")
 p1.gain_xp("soul", 40)
-check("灵魂 40 XP → 强度 2（魔核成长）", p1.soul_strength == 2 and p1.soul_xp >= 40)
-check("位阶称谓双路线并列", "术士" in p1.rank_title() and "剑士" in p1.rank_title())
+check("灵魂轨并入主轨：soul XP 直入 magic_xp（soul 字段已删）",
+      p1.magic_xp >= 170 and not hasattr(p1, "soul_strength"))
+_amt = p1.cuit()
+check("淬体：锁定体能条 1:1 淬入主轨并清零",
+      _amt > 0 and p1.body_xp == 0 and p1.magic_xp > 200)
+check("位阶称谓单主轨（含路线后缀）",
+      "术士" in p1.rank_title() and "法师" in p1.rank_title())
+check("升阶回满：魔力池 = 上限 100+20×(阶位-1)", p1.mana == p1.mana_max() == 140.0,
+      "mana=%.1f max=%.1f" % (p1.mana, p1.mana_max()))
 
 w3, p3 = fresh_world(502)
 w3.resources.append({"type": "herb", "pos": (5, 5), "amount": 30, "regen_rate": 0.2})
 p3.fx, p3.fy = 5.0, 5.0
 _b0 = p3.body_xp
-p3.gather(w3)
-check("采集→体能 XP", p3.body_xp > _b0)
-p3.inventory = {"wood": 1}
 _m0 = p3.magic_xp
+p3.gather(w3)
+check("采集不再产 XP（体能唯一来源=炼化精血；主轨来源=冥想/淬体）",
+      p3.body_xp == _b0 and p3.magic_xp == _m0)
+p3.inventory = {"wood": 1}
 aid3, _ = p3.create_work(w3, "测试之作")
-check("创作→魔力 XP", aid3 is not None and p3.magic_xp > _m0)
+check("创作不再产 XP（用户口径）", aid3 is not None and p3.magic_xp == _m0)
+# 精血炼化：体质/体能唯一来源
+p3.inventory["beast_blood"] = 1
+_b1 = p3.body_xp
+_rn, _ra = p3.refine()
+check("炼化魔兽精血 → 体能 +30（体质改造）",
+      _rn == "魔兽精血" and p3.body_xp >= _b1 + 30 and p3.inventory.get("beast_blood", 0) == 0)
+p3.inventory["dragon_blood"] = 1
+p3.refine()
+check("炼化龙血 → 体能 +120（强大生物级）", p3.body_xp >= _b1 + 150)
+# 魔晶：第四路回魔
+w3.resources.append({"type": "crystal", "pos": (5, 6), "amount": 5, "regen_rate": 0.2})
+p3.fx, p3.fy = 5.0, 6.0
+_ma0 = p3.mana
+p3.mana = 50.0
+_ma0 = p3.mana
+p3.gather(w3)
+check("采集魔晶 → 回魔", p3.mana > _ma0)
+# 冥想（法师）：占时涨魔核强度 + 回魔
+_mx0 = p3.magic_xp
+check("冥想可启动（法师路线）", p3.start_meditate() is True)
+for _ in range(p3.MEDITATE_TICKS):
+    p3._cultivate_step()
+check("冥想 %d tick → 魔核强度(主轨)增长 + 回魔" % p3.MEDITATE_TICKS,
+      p3.magic_xp > _mx0 and p3.mana > _ma0 and p3.meditate_left == 0)
+# 呼吸法（剑士）：耗魔力养心脏 → 魔力环（剑士位阶）
+w5, p5 = fresh_world(504)
+p5.route = "sword"
+p5.mana = 200.0
+_sx0, _sr0, _sm0 = p5.sword_xp, p5.sword_rank, p5.mana
+check("呼吸法可启动（剑士路线）", p5.start_breathe() is True)
+for _ in range(p5.BREATHE_TICKS):
+    p5._cultivate_step()
+check("呼吸法 → 魔力环(剑士位阶)成长，且消耗魔力",
+      p5.sword_xp > _sx0 and p5.sword_rank > _sr0 and p5.mana < _sm0)
+# 技能不再随路线分岔（用户口径 2026-11-17）
+check("技能不随路线分岔：两系技能均可（主轨位阶解锁）",
+      "spell" in p3.skill_loadout() and "sword" in p3.skill_loadout()
+      and "spell" in p5.skill_loadout() and "sword" in p5.skill_loadout())
+# 成长线按位阶解锁（起手线可用，主轨 2 阶解锁第二线 → 后期可三线并行）
+w6, p6 = fresh_world(505)
+check("成长线解锁：法师起手可冥想、1 阶时呼吸法未解锁",
+      p6.can_meditate() and not p6.can_breathe() and p6.UNLOCK_RANK == 2)
+check("成长线解锁：剑士起手可呼吸法、1 阶时冥想未解锁",
+      p5.can_breathe() and not p5.can_meditate())
+p6.magic_rank = 2
+check("成长线解锁：主轨 2 阶后解锁第二线（三线并行可用）",
+      p6.can_meditate() and p6.can_breathe() and p6.can_refine())
 
 # 效果接线抽查：energy_cost 与 deadline_bonus（公示即执行）
 w4, p4 = fresh_world(503)
@@ -606,15 +662,13 @@ def _story_act(w, p, eng):
         if n < c["count"]:
             _do_craft()
     elif m == "rank_reach":
-        cur = {"magic": p.magic_rank, "body": p.body_rank,
-               "soul": p.soul_strength}[c["kind"]]
+        cur = p.magic_rank              # 单主轨（第二批）：kind 仅作剧情标签
         if cur < c["target"]:
             if c["kind"] == "body":
-                _go_res(None)
-            elif c["kind"] == "magic":
-                _do_craft()
+                p.body_xp += 200        # 体能条锁定：灌能后淬体直入主轨
+                p.cuit()
             else:
-                _do_trade()
+                _do_craft()
     elif m == "wealth_reach":
         pass                                   # UBI 节拍自然达成，纯等待
     elif m == "build_first":
@@ -848,6 +902,10 @@ from demo.factions import (                            # noqa: E402
 
 _wd1, _pd1 = fresh_world(701)
 _wd2, _pd2 = fresh_world(701)
+# 切磋用例走剑士路线（剑法族·木剑式）：技能树分岔后法师无剑法可用，
+# 且魔法弹威力 9 低于对手还手 9 → 无法复现原「胜出」判据；战斗数值维持现状不改。
+_pd1.route = "sword"
+_pd2.route = "sword"
 _d1 = _wd1.resolve_duel(_pd1, _wd1.agents[0])
 _d2 = _wd2.resolve_duel(_pd2, _wd2.agents[0])
 check("同 seed 切磋结算逐字节一致（零 RNG）",
@@ -855,7 +913,7 @@ check("同 seed 切磋结算逐字节一致（零 RNG）",
 _duel_n = len([e for e in _wd1.event_log if e.etype == EventType.DUEL])
 check("DUEL 事件入事件流（目标/剧情层可复算）",
       _duel_n == 1, "事件=%d" % _duel_n)
-check("技能双轨：一阶即有木剑式/魔力弹，自动选轨可得技能",
+check("技能树分岔：一阶即有本路线技能（剑士=木剑式）",
       _pd1.best_skill() is not None
       and _pd1.skill_loadout().get("sword", {}).get("name") == "木剑式",
       "loadout=%s" % sorted(_pd1.skill_loadout().keys()))
